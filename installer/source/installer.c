@@ -466,6 +466,48 @@ void patch_1100(uint64_t kernbase) {
     *(uint8_t*)(kernbase + 0x245EE4) = VM_PROT_ALL;
 }
 
+
+void patch_1300(uint64_t kernbase) {
+    // patch memcpy first
+    *(uint8_t*)(kernbase + 0x2BD4ED) = 0xEB;
+
+    // patch sceSblACMgrIsAllowedSystemLevelDebugging
+    memcpy((void*)(kernbase + 0x3B2D30), "HÇÀ   Ã", 8);
+
+    // patch sceSblACMgrHasMmapSelfCapability
+    memcpy((void*)(kernbase + 0x3B2DA0), "HÇÀ   Ã", 8);
+
+    // patch sceSblACMgrIsAllowedToMmapSelf
+    memcpy((void*)(kernbase + 0x3B2DC0), "HÇÀ   Ã", 8);
+
+    // disable sysdump_perform_dump_on_fatal_trap
+    // will continue execution and give more information on crash, such as rip
+    *(uint8_t*)(kernbase + 0x76BA30) = 0xC3;
+
+    // self patches
+    memcpy((void*)(kernbase + 0x1FC4A1), "1À", 5);
+
+    // patch vm_map_protect check
+    memcpy((void*)(kernbase + 0x2FC14C), "", 6);
+
+    // patch ptrace, thanks 2much4u
+    *(uint8_t*)(kernbase + 0x3669E5) = 0xEB;
+
+    // remove all these bullshit checks from ptrace, by golden
+    memcpy((void*)(kernbase + 0x366ED1), "é|  ", 5);
+
+    // patch ASLR, thanks 2much4u
+    *(uint16_t*)(kernbase + 0x477CB4) = 0x9090;
+
+    // patch kmem_alloc
+    *(uint8_t*)(kernbase + 0x465B0C) = VM_PROT_ALL;
+    *(uint8_t*)(kernbase + 0x465B14) = VM_PROT_ALL;
+
+    // ps4debug 1.1.19 additionally NOPs the kernel-address bounds check inside
+    // copyout (+0x2BD632) and copyin (+0x2BD727). Not applied here: WebRTE never
+    // calls copyin/copyout, so relaxing that check would only weaken the kernel.
+}
+
 void *rwx_alloc(uint64_t size) {
     uint64_t alignedSize = (size + 0x3FFFull) & ~0x3FFFull;
     return (void *)kmem_alloc(*kernel_map, alignedSize);
@@ -615,6 +657,9 @@ void patch_kernel() {
         break;
     case 1100:
         patch_1100(kernbase);
+        break;
+    case 1300:
+        patch_1300(kernbase);
         break;
     }
 
