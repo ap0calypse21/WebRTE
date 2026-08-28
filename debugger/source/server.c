@@ -1351,9 +1351,33 @@ static const struct kwindow kwin_1300[] = {
     { 0x1520000, 0x2834AF0 },   // data and bss, rw-
 };
 
+// Those bounds are 13.00's. On any other firmware they are simply wrong, and
+// wrong here is not harmless: the range check would pass against the wrong
+// limits and sys_kern_rw -- a bare memcpy with no fault handler -- would read
+// an unmapped page and take the console down. Refuse rather than guess.
+static int kernel_is_1300(void) {
+    unsigned char *buf = NULL;
+    size_t len = 0;
+
+    if(sysctl_read("kern.version", &buf, &len)) {
+        return 0;
+    }
+
+    buf[len - 1] = 0;
+    int ok = strstr((char *)buf, "release_13.0") != NULL;
+    free(buf);
+
+    return ok;
+}
+
 int handle_kdump(int sock, struct paramdict *params) {
     char *saddr = paramdict_search(params, "address");
     char *slen = paramdict_search(params, "length");
+
+    if(!kernel_is_1300()) {
+        send_err(sock, "the kernel window table is 13.00 only", 0);
+        return 0;
+    }
 
     uint64_t kbase = 0;
     if(sys_kern_base(&kbase) || !kbase) {
