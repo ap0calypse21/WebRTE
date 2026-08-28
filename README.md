@@ -198,11 +198,20 @@ temperature, its dword at 4 is the error, and *measured − setpoint* equals tha
 last bit. Zone 0's measured value also matches `sceKernelGetCpuTemperature` to the degree.
 Zone 2 reads zero on this hardware: no sensor behind it, so the panel disables it.
 
-Verified live, twice: dropping zone 1 from 50.5 °C to 45.0 took the fan from **292 to 326**
-and the temperature down with it, and restoring 50.5 settled it back to **300**. Nothing
-latched.
+Verified live, several times: dropping zone 1 from 50.5 °C to 45.0 took the fan from **292 to
+326** and the temperature down with it, and restoring 50.5 settled it back to **300**. Through
+the panel's own buttons, **Colder &minus;10°** took it 303 → 357 and **Restore every zone** put
+it back to 310. Nothing latched.
 
-So the control is a **setpoint in °C**, per zone. Lower it and the console cools harder.
+So the control is: **tell a zone to start working earlier.** The panel puts that on a slider
+per zone — left is stock, right is cooler and louder — with quick buttons for &minus;5, &minus;10
+and &minus;15 degrees across every live zone at once, and a live fan readout so you can watch it
+respond.
+
+**Stock means the factory values, not whatever the panel saw first.** Taking the baseline from
+the first read is wrong the moment somebody has already lowered a setpoint: restoring would put
+the lowered value back and leave the fan loud for good. The 13.00 factory tables are built in,
+and a zone sitting away from them is labelled **changed**.
 
 | op | ioctl | what it does |
 |---|---|---|
