@@ -9,6 +9,11 @@
 //char *(*strtok)(char *str, const char *delimiters);
 unsigned long long int (*strtoull)(const char *str, char **endptr, int base);
 
+// Confirmed by disassembling libkernel_sys 13.00 at 0x23290: rdi is the
+// sensor index and rsi the output, and it reaches the sensor through
+// ioctl(0xC008A502) on /dev/sbi.
+int (*sceKernelGetSocSensorTemperature)(int index, int *out);
+
 struct api_operation {
     char name[32];
     int (*handler)(int sock, struct paramdict *);
@@ -483,14 +488,27 @@ static void json_sysctl(char *json, int size, const char *key, const char *name)
     } else if(len == 8) {
         snprintf(scratch, sizeof(scratch), "\"%s\": %llu, ", key, *(uint64_t *)buf);
     } else {
-        int n = (int)(len > 96 ? 96 : len);
-        snprintf(scratch, sizeof(scratch), "\"%s\": \"", key);
-        strcat(json, scratch);
-        for(int i = 0; i < n; i++) {
-            snprintf(scratch, sizeof(scratch), "%02x", buf[i]);
-            strcat(json, scratch);
+        // A NUL-terminated printable run is far more useful as text than as
+        // hex -- hw.model, kern.version and dev.cpu.0.freq_levels are strings.
+        int printable = (len > 1 && buf[len - 1] == 0);
+        for(size_t i = 0; printable && i < len - 1; i++) {
+            if((buf[i] < 0x20 || buf[i] > 0x7e) && buf[i] != 0) {
+                printable = 0;
+            }
         }
-        strcat(json, "\", ");
+        if(printable) {
+            snprintf(scratch, sizeof(scratch), "\"%s\": \"%s\", ", key, (char *)buf);
+            strcat(json, scratch);
+        } else {
+            int n = (int)(len > 96 ? 96 : len);
+            snprintf(scratch, sizeof(scratch), "\"%s\": \"", key);
+            strcat(json, scratch);
+            for(int i = 0; i < n; i++) {
+                snprintf(scratch, sizeof(scratch), "%02x", buf[i]);
+                strcat(json, scratch);
+            }
+            strcat(json, "\", ");
+        }
         free(buf);
         return;
     }
@@ -555,7 +573,7 @@ int handle_sysctl(int sock, struct paramdict *params) {
 }
 
 int handle_sensors(int sock, struct paramdict *params) {
-    int size = 4096;
+    int size = 8192;
     char *json = (char *)pfmalloc(size);
     memset(json, 0, size);
     char scratch[512];
@@ -571,20 +589,40 @@ int handle_sensors(int sock, struct paramdict *params) {
     }
     strcat(json, scratch);
 
+    // Second SBI sensor. Index 0 is the SoC die; higher indices return an
+    // error on this hardware and are simply reported as null.
+    int soc_temp = 0;
+    if(sceKernelGetSocSensorTemperature && sceKernelGetSocSensorTemperature(0, &soc_temp) == 0) {
+        snprintf(scratch, sizeof(scratch), "\"soc_temp_c\": %i, ", soc_temp);
+    } else {
+        snprintf(scratch, sizeof(scratch), "\"soc_temp_c\": null, ");
+    }
+    strcat(json, scratch);
+
+    // Cached at load time by libkernel; takes no arguments.
+    snprintf(scratch, sizeof(scratch), "\"direct_mem_total\": %llu, ",
+             (unsigned long long)sceKernelGetDirectMemorySize());
+    strcat(json, scratch);
+
+    // Only nodes that were confirmed present on a 13.00 console. Sony strips
+    // most of the stock FreeBSD tree: hw.physmem, vm.stats.*, kern.cp_time and
+    // the whole hw.acpi.thermal branch all return ENOENT here.
     json_sysctl(json, size, "cpu_freq_mhz",   "dev.cpu.0.freq");
+    json_sysctl(json, size, "freq_levels",    "dev.cpu.0.freq_levels");
     json_sysctl(json, size, "ncpu",           "hw.ncpu");
-    json_sysctl(json, size, "physmem",        "hw.physmem");
-    json_sysctl(json, size, "realmem",        "hw.realmem");
     json_sysctl(json, size, "pagesize",       "hw.pagesize");
-    json_sysctl(json, size, "thermal_tz0_c",  "hw.acpi.thermal.tz0.temperature");
-    json_sysctl(json, size, "thermal_active", "hw.acpi.thermal.tz0.active");
-    json_sysctl(json, size, "fan_duty",       "dev.icc_fan.0.fan_manual_duty");
-    json_sysctl(json, size, "vm_page_count",  "vm.stats.vm.v_page_count");
-    json_sysctl(json, size, "vm_free_count",  "vm.stats.vm.v_free_count");
-    json_sysctl(json, size, "vm_wire_count",  "vm.stats.vm.v_wire_count");
-    json_sysctl(json, size, "osreldate",      "kern.osreldate");
-    json_sysctl(json, size, "cp_time",        "kern.cp_time");
+    json_sysctl(json, size, "availpages",     "hw.availpages");
+    json_sysctl(json, size, "model",          "hw.model");
+    json_sysctl(json, size, "mlock_avail",    "vm.budgets.mlock_avail");
+    json_sysctl(json, size, "mlock_total",    "vm.budgets.mlock_total");
+    json_sysctl(json, size, "swap_total",     "vm.swap_total");
+    json_sysctl(json, size, "swap_reserved",  "vm.swap_reserved");
+    json_sysctl(json, size, "tsc_freq",       "machdep.tsc_freq");
+    json_sysctl(json, size, "icc_max",        "machdep.liverpool.icc_max");
     json_sysctl(json, size, "telemetry",      "machdep.liverpool.telemetry");
+    json_sysctl(json, size, "osreldate",      "kern.osreldate");
+    json_sysctl(json, size, "osrelease",      "kern.osrelease");
+    json_sysctl(json, size, "version",        "kern.version");
 
     // drop the trailing ", "
     int l = (int)strlen(json);
@@ -734,6 +772,7 @@ int resolve() {
     
     RESOLVE(libc, strtok);
     RESOLVE(libc, strtoull);
+    RESOLVE(libKernelHandle, sceKernelGetSocSensorTemperature);
 
     return 0;
 }
