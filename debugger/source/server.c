@@ -423,6 +423,182 @@ int handle_resume(int sock, struct paramdict *params) {
     return 0;
 }
 
+
+// -------------------------------------------------------------------------
+// Telemetry. Everything below reads only; nothing here writes to the console.
+//
+// sysctlbyname and sceKernelGetCpuTemperature are already resolved by libPS4's
+// initKernel(), which _main() calls before the server starts. Most of what a
+// devkit shows is a sysctl underneath anyway -- sceKernelGetCpuFrequency is a
+// wrapper over "dev.cpu.0.freq" and sceKernelGetSocPowerConsumption over
+// "machdep.liverpool.telemetry" -- so one generic reader covers the bulk of it
+// without resolving a single extra symbol.
+// -------------------------------------------------------------------------
+
+#define SYSCTL_MAX 65536
+
+// Two-phase read: ask for the size first, then fetch. Returns 0 on success and
+// leaves the byte count in *outlen.
+static int sysctl_read(const char *name, unsigned char **out, size_t *outlen) {
+    size_t len = 0;
+
+    if(sysctlbyname((char *)name, NULL, &len, NULL, 0)) {
+        return 1;
+    }
+
+    if(!len || len > SYSCTL_MAX) {
+        return 1;
+    }
+
+    unsigned char *buf = (unsigned char *)pfmalloc(len);
+    if(!buf) {
+        return 1;
+    }
+
+    if(sysctlbyname((char *)name, (char *)buf, &len, NULL, 0)) {
+        free(buf);
+        return 1;
+    }
+
+    *out = buf;
+    *outlen = len;
+    return 0;
+}
+
+// Appends `"key": <value>` for a sysctl, or `"key": null` when it is missing.
+// 4- and 8-byte nodes are emitted as numbers, anything else as a hex string.
+static void json_sysctl(char *json, int size, const char *key, const char *name) {
+    char scratch[512];
+    unsigned char *buf = NULL;
+    size_t len = 0;
+
+    if(sysctl_read(name, &buf, &len)) {
+        snprintf(scratch, sizeof(scratch), "\"%s\": null, ", key);
+        strcat(json, scratch);
+        return;
+    }
+
+    if(len == 4) {
+        snprintf(scratch, sizeof(scratch), "\"%s\": %u, ", key, *(uint32_t *)buf);
+    } else if(len == 8) {
+        snprintf(scratch, sizeof(scratch), "\"%s\": %llu, ", key, *(uint64_t *)buf);
+    } else {
+        int n = (int)(len > 96 ? 96 : len);
+        snprintf(scratch, sizeof(scratch), "\"%s\": \"", key);
+        strcat(json, scratch);
+        for(int i = 0; i < n; i++) {
+            snprintf(scratch, sizeof(scratch), "%02x", buf[i]);
+            strcat(json, scratch);
+        }
+        strcat(json, "\", ");
+        free(buf);
+        return;
+    }
+
+    strcat(json, scratch);
+    free(buf);
+}
+
+int handle_sysctl(int sock, struct paramdict *params) {
+    char *name = paramdict_search(params, "name");
+    if(!name) {
+        return 1;
+    }
+
+    unsigned char *buf = NULL;
+    size_t len = 0;
+    if(sysctl_read(name, &buf, &len)) {
+        return 1;
+    }
+
+    int size = (int)(len * 2 + 1024);
+    char *json = (char *)pfmalloc(size);
+    memset(json, 0, size);
+
+    char scratch[512];
+    snprintf(scratch, sizeof(scratch), "{ \"name\": \"%s\", \"size\": %i, ", name, (int)len);
+    strcat(json, scratch);
+
+    if(len == 4) {
+        snprintf(scratch, sizeof(scratch), "\"int\": %u, ", *(uint32_t *)buf);
+        strcat(json, scratch);
+    } else if(len == 8) {
+        snprintf(scratch, sizeof(scratch), "\"int\": %llu, ", *(uint64_t *)buf);
+        strcat(json, scratch);
+    }
+
+    // A NUL-terminated run of printable bytes is worth showing as text too.
+    int printable = (len > 1 && buf[len - 1] == 0);
+    for(size_t i = 0; printable && i < len - 1; i++) {
+        if(buf[i] < 0x20 || buf[i] > 0x7e) {
+            printable = 0;
+        }
+    }
+    if(printable) {
+        snprintf(scratch, sizeof(scratch), "\"str\": \"%s\", ", (char *)buf);
+        strcat(json, scratch);
+    }
+
+    strcat(json, "\"hex\": \"");
+    for(size_t i = 0; i < len; i++) {
+        snprintf(scratch, sizeof(scratch), "%02x", buf[i]);
+        strcat(json, scratch);
+    }
+    strcat(json, "\" }");
+
+    send_response(sock, 200, json);
+
+    free(json);
+    free(buf);
+
+    return 0;
+}
+
+int handle_sensors(int sock, struct paramdict *params) {
+    int size = 4096;
+    char *json = (char *)pfmalloc(size);
+    memset(json, 0, size);
+    char scratch[512];
+
+    strcat(json, "{ ");
+
+    // /dev/sbi rather than a sysctl, and already resolved by libPS4.
+    uint32_t cpu_temp = 0;
+    if(sceKernelGetCpuTemperature(&cpu_temp) == 0) {
+        snprintf(scratch, sizeof(scratch), "\"cpu_temp_c\": %u, ", cpu_temp);
+    } else {
+        snprintf(scratch, sizeof(scratch), "\"cpu_temp_c\": null, ");
+    }
+    strcat(json, scratch);
+
+    json_sysctl(json, size, "cpu_freq_mhz",   "dev.cpu.0.freq");
+    json_sysctl(json, size, "ncpu",           "hw.ncpu");
+    json_sysctl(json, size, "physmem",        "hw.physmem");
+    json_sysctl(json, size, "realmem",        "hw.realmem");
+    json_sysctl(json, size, "pagesize",       "hw.pagesize");
+    json_sysctl(json, size, "thermal_tz0_c",  "hw.acpi.thermal.tz0.temperature");
+    json_sysctl(json, size, "thermal_active", "hw.acpi.thermal.tz0.active");
+    json_sysctl(json, size, "fan_duty",       "dev.icc_fan.0.fan_manual_duty");
+    json_sysctl(json, size, "vm_page_count",  "vm.stats.vm.v_page_count");
+    json_sysctl(json, size, "vm_free_count",  "vm.stats.vm.v_free_count");
+    json_sysctl(json, size, "vm_wire_count",  "vm.stats.vm.v_wire_count");
+    json_sysctl(json, size, "osreldate",      "kern.osreldate");
+    json_sysctl(json, size, "cp_time",        "kern.cp_time");
+    json_sysctl(json, size, "telemetry",      "machdep.liverpool.telemetry");
+
+    // drop the trailing ", "
+    int l = (int)strlen(json);
+    if(l >= 2 && json[l - 2] == ',') {
+        json[l - 2] = 0;
+    }
+    strcat(json, " }");
+
+    send_response(sock, 200, json);
+    free(json);
+
+    return 0;
+}
+
 struct api_operation operations[] = {
     { "list", handle_list },
     { "info", handle_info },
@@ -433,6 +609,8 @@ struct api_operation operations[] = {
     { "free", handle_free },
     { "pause", handle_pause },
     { "resume", handle_resume },
+    { "sysctl", handle_sysctl },
+    { "sensors", handle_sensors },
     { "", 0 }
 };
 
