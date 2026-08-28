@@ -31,13 +31,23 @@ a file browser, a kernel dumper, the kernel log, and a flight recorder that free
 - [API reference](#api-reference)
 - [What is new in this fork](#what-is-new-in-this-fork)
 - [Known limits](#known-limits)
+- [Building](#building)
 - [Credits](#credits)
 
 ---
 
 ## Quick start
 
-Three things, in order.
+**0. Get `webrte.bin`.** It is not in the repository — `*.bin` is a build artefact — so
+download the latest one from
+**[Releases](https://github.com/ap0calypse21/WebRTE/releases/latest)**, or
+[build it yourself](#building).
+
+```
+curl -LO https://github.com/ap0calypse21/WebRTE/releases/latest/download/webrte.bin
+```
+
+Then three things, in order.
 
 **1. Send the payload.** Console jailbroken with GoldHEN, payload receiver on port 9090:
 
