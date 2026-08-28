@@ -4,32 +4,50 @@
 
 #include "proc.h"
 
+// Walking allproc without holding allproc_lock races with processes exiting,
+// and this code has no way to take that lock. It cannot be made correct here,
+// but it can be stopped from following a dangling p_forw off into unmapped
+// memory, which is what turns the race into a kernel panic instead of a miss.
+//
+// Two guards: every link must look like a kernel pointer before it is
+// dereferenced, and the walk is bounded so a corrupted list terminates.
+#define PROC_WALK_MAX   4096
+#define KVA_MIN         0xFFFFFF8000000000ULL
+
+static inline int proc_ptr_ok(struct proc *p) {
+    return p && ((uint64_t)p >= KVA_MIN);
+}
+
 struct proc *proc_find_by_name(const char *name) {
     struct proc *p;
+    int guard = 0;
 
     if (!name) {
         return NULL;
     }
 
     p = *allproc;
-    do {
+    while (proc_ptr_ok(p) && ++guard < PROC_WALK_MAX) {
         if (!memcmp(p->p_comm, name, strlen(name))) {
             return p;
         }
-    } while ((p = p->p_forw));
+        p = p->p_forw;
+    }
 
     return NULL;
 }
 
 struct proc *proc_find_by_pid(int pid) {
     struct proc *p;
+    int guard = 0;
 
     p = *allproc;
-    do {
+    while (proc_ptr_ok(p) && ++guard < PROC_WALK_MAX) {
         if (p->pid == pid) {
             return p;
         }
-    } while ((p = p->p_forw));
+        p = p->p_forw;
+    }
 
     return NULL;
 }
