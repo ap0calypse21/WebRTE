@@ -15,7 +15,9 @@ int _main(void) {
     sceKernelSleep(1);
 
     // just a little notify
-    sceSysUtilSendSystemNotificationWithText(222, "webrte by golden\nUpdated By EchoStretch");
+    sceSysUtilSendSystemNotificationWithText(222, "webrte by golden\n"
+        "Updated By EchoStretch\n"
+        "Developed & FW 13.00 support by MasterMaind");
     
     // jailbreak current thread
     sys_console_cmd(SYS_CONSOLE_CMD_JAILBREAK, NULL);
