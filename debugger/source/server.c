@@ -1070,6 +1070,360 @@ int handle_storage(int sock, struct paramdict *params) {
     return 0;
 }
 
+// -------------------------------------------------------------------------
+// Files and bulk reads.
+//
+// send_response cannot carry any of this: it measures the body with strlen, so
+// the first zero byte would truncate a binary transfer. Everything below sends
+// its own header and then streams, which also keeps the payload from having to
+// allocate a whole file at once.
+// -------------------------------------------------------------------------
+
+#define XFER_CHUNK   0x10000     // 64 KB per send, so nothing large is allocated
+#define LS_JSON_MAX  0x40000     // 256 KB of listing, about 3000 entries
+#define LS_ENTRIES   4096
+#define DIRENT_BUF   0x8000
+
+// sceNetSend is free to accept less than it was handed. Ignoring the return,
+// the way send_response does, silently drops bytes once a body gets large.
+static int send_all(int sock, const void *buf, int len) {
+    const char *p = (const char *)buf;
+    int sent = 0;
+
+    while(sent < len) {
+        int n = sceNetSend(sock, p + sent, len - sent, 0);
+        if(n <= 0) {
+            return 1;
+        }
+        sent += n;
+    }
+
+    return 0;
+}
+
+static int send_raw_header(int sock, int len, const char *ctype) {
+    char header[512];
+    int n = snprintf(header, sizeof(header),
+                     "HTTP/1.1 200 OK.\r\nAccess-Control-Allow-Origin: *\r\n"
+                     "Content-Type: %s\r\nContent-Length: %i\r\n"
+                     "Accept-Ranges: bytes\r\n\r\n", ctype, len);
+    return send_all(sock, header, n);
+}
+
+static void send_err(int sock, const char *what, int code) {
+    char json[256];
+    snprintf(json, sizeof(json), "{ \"error\": \"%s\", \"ret\": %i }", what, code);
+    send_response(sock, 200, json);
+}
+
+// Escapes the characters JSON cannot carry raw. Filenames on this console are
+// ordinary, but a listing endpoint should not be the thing that trusts that.
+static void json_escape(char *dst, int dstsize, const char *src, int max) {
+    int i, n = 0;
+
+    for(i = 0; i < max && src[i] && n < dstsize - 7; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if(c == '"' || c == '\\') {
+            dst[n++] = '\\';
+            dst[n++] = c;
+        } else if(c < 0x20) {
+            n += snprintf(dst + n, dstsize - n, "\\u%04x", c);
+        } else {
+            dst[n++] = c;
+        }
+    }
+
+    dst[n] = 0;
+}
+
+int handle_ls(int sock, struct paramdict *params) {
+    char *path = paramdict_search(params, "path");
+    if(!path) {
+        return 1;
+    }
+
+    int fd = open(path, O_RDONLY, 0);
+    if(fd < 0) {
+        send_err(sock, "cannot open path", fd);
+        return 0;
+    }
+
+    char *dbuf = (char *)pfmalloc(DIRENT_BUF);
+    char *json = (char *)pfmalloc(LS_JSON_MAX);
+    if(!dbuf || !json) {
+        close(fd);
+        return 1;
+    }
+    memset(json, 0, LS_JSON_MAX);
+
+    int len = 0;
+    len += snprintf(json + len, LS_JSON_MAX - len, "{ \"path\": \"");
+    json_escape(json + len, LS_JSON_MAX - len, path, 1024);
+    len = strlen(json);
+    len += snprintf(json + len, LS_JSON_MAX - len, "\", \"entries\": [ ");
+
+    char name[512];
+    char full[1024];
+    struct stat sb;
+    int count = 0, truncated = 0, n;
+    int first = 1;
+
+    while((n = getdents(fd, dbuf, DIRENT_BUF)) > 0) {
+        int off = 0;
+
+        while(off < n) {
+            struct dirent *de = (struct dirent *)(dbuf + off);
+            if(!de->d_reclen) {
+                break;
+            }
+            off += de->d_reclen;
+
+            if(!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) {
+                continue;
+            }
+            if(count >= LS_ENTRIES || len > LS_JSON_MAX - 1024) {
+                truncated = 1;
+                break;
+            }
+
+            // getdents gives the type but not the size, so each entry costs one
+            // stat. A failed stat is not fatal -- the name is still worth having.
+            snprintf(full, sizeof(full), "%s%s%s", path,
+                     (path[0] && path[strlen(path) - 1] == '/') ? "" : "/", de->d_name);
+            memset(&sb, 0, sizeof(sb));
+            int statok = (stat(full, &sb) == 0);
+
+            json_escape(name, sizeof(name), de->d_name, de->d_namlen);
+            len += snprintf(json + len, LS_JSON_MAX - len,
+                            "%s{ \"name\": \"%s\", \"dir\": %i, \"type\": %i, "
+                            "\"size\": %llu, \"mode\": %u, \"mtime\": %lli }",
+                            first ? "" : ", ", name,
+                            (de->d_type == 4) ? 1 : 0, de->d_type,
+                            statok ? (unsigned long long)sb.st_size : 0ULL,
+                            statok ? (unsigned int)sb.st_mode : 0u,
+                            statok ? (long long)sb.st_mtim.tv_sec : 0LL);
+            first = 0;
+            count++;
+        }
+
+        if(truncated) {
+            break;
+        }
+    }
+
+    close(fd);
+
+    len += snprintf(json + len, LS_JSON_MAX - len,
+                    " ], \"count\": %i, \"truncated\": %i }", count, truncated);
+
+    send_response(sock, 200, json);
+
+    free(json);
+    free(dbuf);
+
+    return 0;
+}
+
+int handle_fstat(int sock, struct paramdict *params) {
+    char *path = paramdict_search(params, "path");
+    if(!path) {
+        return 1;
+    }
+
+    struct stat sb;
+    memset(&sb, 0, sizeof(sb));
+    int r = stat(path, &sb);
+    if(r) {
+        send_err(sock, "stat failed", r);
+        return 0;
+    }
+
+    char json[512];
+    snprintf(json, sizeof(json),
+             "{ \"size\": %llu, \"mode\": %u, \"uid\": %u, \"gid\": %u, "
+             "\"mtime\": %lli, \"blocks\": %llu, \"blksize\": %u, \"dir\": %i }",
+             (unsigned long long)sb.st_size, (unsigned int)sb.st_mode,
+             (unsigned int)sb.st_uid, (unsigned int)sb.st_gid,
+             (long long)sb.st_mtim.tv_sec, (unsigned long long)sb.st_blocks,
+             (unsigned int)sb.st_blksize, S_ISDIR(sb.st_mode) ? 1 : 0);
+    send_response(sock, 200, json);
+
+    return 0;
+}
+
+// Raw file bytes. offset and length are optional; without them the whole file
+// comes back. The client is expected to loop for anything large.
+int handle_dl(int sock, struct paramdict *params) {
+    char *path = paramdict_search(params, "path");
+    if(!path) {
+        return 1;
+    }
+
+    char *soff = paramdict_search(params, "offset");
+    char *slen = paramdict_search(params, "length");
+
+    struct stat sb;
+    memset(&sb, 0, sizeof(sb));
+    if(stat(path, &sb)) {
+        send_err(sock, "stat failed", -1);
+        return 0;
+    }
+
+    int fd = open(path, O_RDONLY, 0);
+    if(fd < 0) {
+        send_err(sock, "cannot open file", fd);
+        return 0;
+    }
+
+    uint64_t off = soff ? strtoull(soff, NULL, 0) : 0;
+    uint64_t size = (uint64_t)sb.st_size;
+    if(off > size) {
+        off = size;
+    }
+
+    uint64_t want = slen ? strtoull(slen, NULL, 0) : (size - off);
+    if(want > size - off) {
+        want = size - off;
+    }
+
+    if(off && lseek(fd, (off_t)off, 0) < 0) {
+        close(fd);
+        send_err(sock, "seek failed", -1);
+        return 0;
+    }
+
+    if(send_raw_header(sock, (int)want, "application/octet-stream")) {
+        close(fd);
+        return 0;
+    }
+
+    unsigned char *buf = (unsigned char *)pfmalloc(XFER_CHUNK);
+    if(!buf) {
+        close(fd);
+        return 1;
+    }
+
+    uint64_t done = 0;
+    while(done < want) {
+        int chunk = (int)((want - done > XFER_CHUNK) ? XFER_CHUNK : (want - done));
+        int got = (int)read(fd, buf, chunk);
+        if(got <= 0) {
+            break;
+        }
+        if(send_all(sock, buf, got)) {
+            break;
+        }
+        done += got;
+    }
+
+    free(buf);
+    close(fd);
+
+    uprintf("dl %s: %llu of %llu bytes", path, done, want);
+
+    return 0;
+}
+
+// -------------------------------------------------------------------------
+// Kernel dump.
+//
+// sys_kern_rw is a bare memcpy with no fault handler, so reading an address
+// that is not mapped kills the console outright rather than returning an
+// error. The 13.00 kernel maps exactly two windows with an 0x8218A8 hole
+// between them -- taken from the PT_LOAD headers of the kernel image -- and
+// this endpoint refuses anything that is not wholly inside one of them.
+// -------------------------------------------------------------------------
+
+struct kwindow {
+    uint64_t start;
+    uint64_t end;
+};
+
+static const struct kwindow kwin_1300[] = {
+    { 0x0000000, 0x0CFE758 },   // text, r-x
+    { 0x1520000, 0x2834AF0 },   // data and bss, rw-
+};
+
+int handle_kdump(int sock, struct paramdict *params) {
+    char *saddr = paramdict_search(params, "address");
+    char *slen = paramdict_search(params, "length");
+
+    uint64_t kbase = 0;
+    if(sys_kern_base(&kbase) || !kbase) {
+        send_err(sock, "cannot read kernel base", -1);
+        return 0;
+    }
+
+    // Without an address, report the windows instead of guessing one. That is
+    // what a client needs in order to ask for anything at all.
+    if(!saddr || !slen) {
+        char json[384];
+        snprintf(json, sizeof(json),
+                 "{ \"kernbase\": %llu, \"windows\": ["
+                 "{ \"offset\": %llu, \"length\": %llu, \"name\": \"text\" }, "
+                 "{ \"offset\": %llu, \"length\": %llu, \"name\": \"data\" } ] }",
+                 (unsigned long long)kbase,
+                 (unsigned long long)kwin_1300[0].start,
+                 (unsigned long long)(kwin_1300[0].end - kwin_1300[0].start),
+                 (unsigned long long)kwin_1300[1].start,
+                 (unsigned long long)(kwin_1300[1].end - kwin_1300[1].start));
+        send_response(sock, 200, json);
+        return 0;
+    }
+
+    uint64_t addr = strtoull(saddr, NULL, 0);
+    uint64_t want = strtoull(slen, NULL, 0);
+
+    // Accept either an absolute kernel address or a kbase-relative offset.
+    uint64_t off = (addr >= kbase) ? (addr - kbase) : addr;
+
+    if(!want || want > 0x800000) {
+        send_err(sock, "length must be 1..0x800000", 0);
+        return 0;
+    }
+
+    int ok = 0;
+    unsigned int i;
+    for(i = 0; i < sizeof(kwin_1300) / sizeof(kwin_1300[0]); i++) {
+        if(off >= kwin_1300[i].start && off + want <= kwin_1300[i].end) {
+            ok = 1;
+            break;
+        }
+    }
+
+    if(!ok) {
+        send_err(sock, "range is outside the mapped kernel windows", 0);
+        return 0;
+    }
+
+    if(send_raw_header(sock, (int)want, "application/octet-stream")) {
+        return 0;
+    }
+
+    unsigned char *buf = (unsigned char *)pfmalloc(XFER_CHUNK);
+    if(!buf) {
+        return 1;
+    }
+
+    uint64_t done = 0;
+    while(done < want) {
+        uint64_t chunk = (want - done > XFER_CHUNK) ? XFER_CHUNK : (want - done);
+        if(sys_kern_rw(kbase + off + done, buf, chunk, 0)) {
+            break;
+        }
+        if(send_all(sock, buf, (int)chunk)) {
+            break;
+        }
+        done += chunk;
+    }
+
+    free(buf);
+
+    uprintf("kdump +0x%llx: %llu of %llu bytes", off, done, want);
+
+    return 0;
+}
+
 struct api_operation operations[] = {
     { "list", handle_list },
     { "info", handle_info },
@@ -1088,6 +1442,10 @@ struct api_operation operations[] = {
     { "kread", handle_kread },
     { "fan", handle_fan },
     { "storage", handle_storage },
+    { "ls", handle_ls },
+    { "fstat", handle_fstat },
+    { "dl", handle_dl },
+    { "kdump", handle_kdump },
     { "", 0 }
 };
 
