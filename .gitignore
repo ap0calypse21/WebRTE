@@ -1,3 +1,5 @@
 *.o
 *.bin
 *.elf
+__pycache__/
+*.pyc
