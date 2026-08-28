@@ -65,7 +65,7 @@ stage of the load failed.
 python dashboard/serve.py --ip 192.168.1.50
 ```
 
-Your browser opens at `http://127.0.0.1:8080/`.
+Your browser opens at `http://127.0.0.1:8181/`.
 
 Nothing here needs installing — Python 3 and its standard library, no packages.
 
@@ -151,7 +151,7 @@ python dashboard/serve.py --ip 192.168.1.50
 python dashboard/serve.py --ip 192.168.1.50 --port 9000 --no-browser
 ```
 
-Every tab is addressable: `http://127.0.0.1:8080/?tab=rec&auto=1` opens the recorder and
+Every tab is addressable: `http://127.0.0.1:8181/?tab=rec&auto=1` opens the recorder and
 pulls a first round of data. Handy as a bookmark.
 
 ### Overview

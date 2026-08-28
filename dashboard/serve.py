@@ -4,7 +4,7 @@
 serve.py - serves the WebRTE dashboard locally and proxies the API to the console.
 
   python serve.py                       # opens the browser
-  python serve.py --ip 192.168.8.8 --port 8080
+  python serve.py --ip 192.168.8.8 --port 8181
 
 Proxying removes every CORS and mixed-content problem: the browser only ever
 talks to localhost, and this script is what talks to the PS4.
@@ -217,7 +217,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ip", default="192.168.8.8", help="console address")
     ap.add_argument("--ps4-port", type=int, default=771, help="WebRTE port")
-    ap.add_argument("--port", type=int, default=8080, help="local dashboard port")
+    ap.add_argument("--port", type=int, default=8181, help="local dashboard port")
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args()
 
