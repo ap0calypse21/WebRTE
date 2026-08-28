@@ -637,6 +637,112 @@ int handle_sensors(int sock, struct paramdict *params) {
     return 0;
 }
 
+
+// -------------------------------------------------------------------------
+// Process control and kernel inspection.
+//
+// The kdebugger already exports more than the HTTP layer used: signals go
+// through the same kill() that pause/resume use, and sys_kern_base /
+// sys_kern_rw / SYS_PROC_THRINFO were implemented but never exposed.
+// -------------------------------------------------------------------------
+
+int handle_signal(int sock, struct paramdict *params) {
+    char *spid = paramdict_search(params, "pid");
+    char *ssig = paramdict_search(params, "sig");
+    if(!spid || !ssig) {
+        return 1;
+    }
+
+    int pid = strtoull(spid, NULL, 0);
+    int sig = strtoull(ssig, NULL, 0);
+
+    // Refuse anything outside the normal signal range so a stray request
+    // cannot turn into an arbitrary syscall argument.
+    if(sig < 1 || sig > 31 || pid < 1) {
+        return 1;
+    }
+
+    kill(pid, sig);
+
+    char scratch[128];
+    snprintf(scratch, sizeof(scratch), "{ \"pid\": %i, \"sig\": %i }", pid, sig);
+    send_response(sock, 200, scratch);
+
+    return 0;
+}
+
+int handle_thrinfo(int sock, struct paramdict *params) {
+    char *spid = paramdict_search(params, "pid");
+    if(!spid) {
+        return 1;
+    }
+
+    int pid = strtoull(spid, NULL, 0);
+
+    struct sys_proc_thrinfo_args args;
+    memset(&args, 0, sizeof(args));
+
+    if(sys_proc_cmd(pid, SYS_PROC_THRINFO, &args)) {
+        return 1;
+    }
+
+    char scratch[512];
+    snprintf(scratch, sizeof(scratch),
+             "{ \"pid\": %i, \"lwpid\": %u, \"priority\": %u, \"name\": \"%s\" }",
+             pid, args.lwpid, args.priority, args.name);
+    send_response(sock, 200, scratch);
+
+    return 0;
+}
+
+int handle_kernbase(int sock, struct paramdict *params) {
+    uint64_t kbase = 0;
+
+    if(sys_kern_base(&kbase)) {
+        return 1;
+    }
+
+    char scratch[128];
+    snprintf(scratch, sizeof(scratch), "{ \"kernbase\": %llu }", (unsigned long long)kbase);
+    send_response(sock, 200, scratch);
+
+    return 0;
+}
+
+int handle_kread(int sock, struct paramdict *params) {
+    char *saddress = paramdict_search(params, "address");
+    char *slength = paramdict_search(params, "length");
+    if(!saddress || !slength) {
+        return 1;
+    }
+
+    uint64_t address = strtoull(saddress, NULL, 0);
+    uint64_t length = strtoull(slength, NULL, 0);
+
+    // A bad kernel read faults the whole console, so keep the window small.
+    if(!length || length > 4096) {
+        return 1;
+    }
+
+    unsigned char *data = (unsigned char *)pfmalloc(length);
+    if(!data) {
+        return 1;
+    }
+
+    if(sys_kern_rw(address, data, length, 0)) {
+        free(data);
+        return 1;
+    }
+
+    char *b64data = b64_encode(data, length);
+    send_response(sock, 200, b64data);
+
+    free(data);
+    free(b64data);
+
+    return 0;
+}
+
 struct api_operation operations[] = {
     { "list", handle_list },
     { "info", handle_info },
@@ -649,6 +755,10 @@ struct api_operation operations[] = {
     { "resume", handle_resume },
     { "sysctl", handle_sysctl },
     { "sensors", handle_sensors },
+    { "signal", handle_signal },
+    { "thrinfo", handle_thrinfo },
+    { "kernbase", handle_kernbase },
+    { "kread", handle_kread },
     { "", 0 }
 };
 
