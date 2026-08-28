@@ -743,6 +743,208 @@ int handle_kread(int sock, struct paramdict *params) {
     return 0;
 }
 
+// -------------------------------------------------------------------------
+// Fan. /dev/icc_fan is a real character device -- its cdevsw sits at
+// kernbase+0xC91348 on 13.00 with d_name "icc_fan", and this ioctl handler at
+// kernbase+0x3F6B70. Every command is forwarded to ICC service 0x0A with the
+// opcode in the message header, and one of them carries the kernel's own
+// string "icc_fan_get_fan_manual_duty", which is what names the pair below.
+//
+// Group 0x8F, num = opcode + 1, all _IOWR:
+//
+//   op  ioctl        len  in                    out
+//   0   0xC0168F01   22   u8 idx @0             u8 @4, 16 bytes @6  (status @2)
+//   1   0xC0148F02   20   -                     u16 @2
+//   2   0xC0048F03    4   u8 @2, u8 @3          -
+//   3   0xC0048F04    4   u8 @2                 u8 @3
+//   4   0xC0068F05    6   u8 @2, u16 @4         -         set manual duty
+//   5   0xC0068F06    6   u8 @2                 u16 @4    get manual duty
+//   6   0xC01C8F07   28   u8 @2, u8 @3, 6x u32  -         set table
+//   7   0xC01C8F08   28   u8 @2                 6x u32 @4 get table
+//   8   0xC0148F09   20   u8 @2                 3x u32 @4, u16 @16
+//
+// Each buffer opens with a u16 status the driver fills in from the SYSCON
+// reply -- 0 means accepted. Op 0 is the exception: its status is at byte 2.
+//
+// GET /fan            reads only: ops 5, 3, 1, 7, 8 and 0.
+// GET /fan?op=N&...   issues exactly one command, the setters included.
+//                     Nothing here writes unless it was asked for by number.
+// -------------------------------------------------------------------------
+
+#define FAN_DEV "/dev/icc_fan"
+#define FAN_IOC(num, len) \
+    ((unsigned long)(0xC0000000UL | ((unsigned long)((len) & 0x1FFF) << 16) \
+                     | (0x8FUL << 8) | (unsigned long)(num)))
+
+static const unsigned long fan_ioc[9] = {
+    FAN_IOC(1, 22), FAN_IOC(2, 20), FAN_IOC(3, 4),
+    FAN_IOC(4, 4),  FAN_IOC(5, 6),  FAN_IOC(6, 6),
+    FAN_IOC(7, 28), FAN_IOC(8, 28), FAN_IOC(9, 20)
+};
+
+static const int fan_len[9] = { 22, 20, 4, 4, 6, 6, 28, 28, 20 };
+
+// Returns 0 only when the ioctl succeeded and the SYSCON accepted it too.
+// Op 0 keeps its status word at byte 2, every other command at byte 0.
+static int fan_op(int fd, int op, unsigned char *buf) {
+    if(ioctl(fd, fan_ioc[op], buf)) {
+        return 1;
+    }
+    return *(unsigned short *)(buf + (op == 0 ? 2 : 0)) != 0;
+}
+
+int handle_fan(int sock, struct paramdict *params) {
+    char json[4096];
+    char scratch[256];
+    unsigned char buf[32];
+    int i;
+
+    int fd = open(FAN_DEV, O_RDWR, 0);
+    if(fd < 0) {
+        // Worth reporting rather than 404ing: a permission failure and a
+        // missing device look identical from the dashboard otherwise.
+        snprintf(json, sizeof(json),
+                 "{ \"error\": \"open %s failed\", \"fd\": %i }", FAN_DEV, fd);
+        send_response(sock, 200, json);
+        return 0;
+    }
+
+    char *sidx = paramdict_search(params, "idx");
+    int idx = sidx ? (int)strtoull(sidx, NULL, 0) : 0;
+
+    char *sop = paramdict_search(params, "op");
+    if(sop) {
+        int op = (int)strtoull(sop, NULL, 0);
+        if(op < 0 || op > 8) {
+            close(fd);
+            return 1;
+        }
+
+        memset(buf, 0, sizeof(buf));
+
+        // Op 0 takes its index at byte 0, every other command at byte 2.
+        if(op == 0) {
+            buf[0] = (unsigned char)idx;
+        } else {
+            buf[2] = (unsigned char)idx;
+        }
+
+        char *sb = paramdict_search(params, "b");
+        if(sb) {
+            buf[3] = (unsigned char)strtoull(sb, NULL, 0);
+        }
+
+        char *sduty = paramdict_search(params, "duty");
+        if(sduty) {
+            *(unsigned short *)(buf + 4) = (unsigned short)strtoull(sduty, NULL, 0);
+        }
+
+        for(i = 0; i < 6; i++) {
+            char key[3];
+            key[0] = 'd';
+            key[1] = (char)('0' + i);
+            key[2] = 0;
+            char *sd = paramdict_search(params, key);
+            if(sd) {
+                *(unsigned int *)(buf + 4 + i * 4) = (unsigned int)strtoull(sd, NULL, 0);
+            }
+        }
+
+        int r = ioctl(fd, fan_ioc[op], buf);
+        close(fd);
+
+        snprintf(json, sizeof(json),
+                 "{ \"op\": %i, \"ioctl\": \"0x%08X\", \"ret\": %i, \"status\": %u, \"hex\": \"",
+                 op, (unsigned int)fan_ioc[op], r,
+                 *(unsigned short *)(buf + (op == 0 ? 2 : 0)));
+        for(i = 0; i < fan_len[op]; i++) {
+            snprintf(scratch, sizeof(scratch), "%02x", buf[i]);
+            strcat(json, scratch);
+        }
+        strcat(json, "\" }");
+        send_response(sock, 200, json);
+        return 0;
+    }
+
+    memset(json, 0, sizeof(json));
+    strcat(json, "{ ");
+
+    memset(buf, 0, sizeof(buf));
+    buf[2] = (unsigned char)idx;
+    if(!fan_op(fd, 5, buf)) {
+        snprintf(scratch, sizeof(scratch), "\"duty\": %u, ", *(unsigned short *)(buf + 4));
+    } else {
+        snprintf(scratch, sizeof(scratch), "\"duty\": null, ");
+    }
+    strcat(json, scratch);
+
+    memset(buf, 0, sizeof(buf));
+    buf[2] = (unsigned char)idx;
+    if(!fan_op(fd, 3, buf)) {
+        snprintf(scratch, sizeof(scratch), "\"mode\": %u, ", buf[3]);
+    } else {
+        snprintf(scratch, sizeof(scratch), "\"mode\": null, ");
+    }
+    strcat(json, scratch);
+
+    memset(buf, 0, sizeof(buf));
+    if(!fan_op(fd, 1, buf)) {
+        snprintf(scratch, sizeof(scratch), "\"op1\": %u, ", *(unsigned short *)(buf + 2));
+    } else {
+        snprintf(scratch, sizeof(scratch), "\"op1\": null, ");
+    }
+    strcat(json, scratch);
+
+    // Six dwords. That is the shape a thermal table would have, but nothing
+    // here proves it -- they are reported raw until the values say otherwise.
+    memset(buf, 0, sizeof(buf));
+    buf[2] = (unsigned char)idx;
+    if(!fan_op(fd, 7, buf)) {
+        strcat(json, "\"table\": [");
+        for(i = 0; i < 6; i++) {
+            snprintf(scratch, sizeof(scratch), "%s%u",
+                     i ? ", " : "", *(unsigned int *)(buf + 4 + i * 4));
+            strcat(json, scratch);
+        }
+        strcat(json, "], ");
+    } else {
+        strcat(json, "\"table\": null, ");
+    }
+
+    memset(buf, 0, sizeof(buf));
+    buf[2] = (unsigned char)idx;
+    if(!fan_op(fd, 8, buf)) {
+        snprintf(scratch, sizeof(scratch), "\"op8\": [%u, %u, %u, %u], ",
+                 *(unsigned int *)(buf + 4), *(unsigned int *)(buf + 8),
+                 *(unsigned int *)(buf + 12), *(unsigned short *)(buf + 16));
+    } else {
+        snprintf(scratch, sizeof(scratch), "\"op8\": null, ");
+    }
+    strcat(json, scratch);
+
+    memset(buf, 0, sizeof(buf));
+    buf[0] = (unsigned char)idx;
+    if(!fan_op(fd, 0, buf)) {
+        snprintf(scratch, sizeof(scratch), "\"op0_byte\": %u, \"op0\": \"", buf[4]);
+        strcat(json, scratch);
+        for(i = 0; i < 16; i++) {
+            snprintf(scratch, sizeof(scratch), "%02x", buf[6 + i]);
+            strcat(json, scratch);
+        }
+        strcat(json, "\", ");
+    } else {
+        strcat(json, "\"op0_byte\": null, \"op0\": null, ");
+    }
+
+    snprintf(scratch, sizeof(scratch), "\"idx\": %i }", idx);
+    strcat(json, scratch);
+
+    close(fd);
+    send_response(sock, 200, json);
+
+    return 0;
+}
+
 struct api_operation operations[] = {
     { "list", handle_list },
     { "info", handle_info },
@@ -759,6 +961,7 @@ struct api_operation operations[] = {
     { "thrinfo", handle_thrinfo },
     { "kernbase", handle_kernbase },
     { "kread", handle_kread },
+    { "fan", handle_fan },
     { "", 0 }
 };
 
