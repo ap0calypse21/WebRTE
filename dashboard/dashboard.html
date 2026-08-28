@@ -609,23 +609,20 @@
       </div>
 
       <div class="dsec">
-        <h5>Manual duty</h5>
+        <h5>Fan control &mdash; thermal setpoints</h5>
         <div class="note" id="thWarn">
-          <b>This bypasses automatic thermal control.</b>
-          Opcode 4 hands SYSCON a fixed duty and it stops following its own curve
-          until the console is restarted or automatic mode is put back.
-          Raising the duty cools harder and is the safe direction; lowering it is
-          how hardware gets damaged. Nothing is written until you press Apply.
+          The fan is not driven by a speed you set. Each zone runs a controller with a
+          <b>temperature setpoint</b>, and the fan follows how far the measured temperature sits
+          above it. <b>Lowering a setpoint means more cooling</b> and is the safe direction;
+          raising one means less, so the sliders will not go above the value each zone had when
+          this panel opened. Nothing is written until you press Apply.
         </div>
-        <div class="row">
-          <input type="range" id="thDuty" min="0" max="255" value="0" disabled>
-          <input type="number" id="thDutyN" min="0" max="65535" value="0" style="width:92px" disabled>
-          <button id="thApply" class="danger" disabled>Apply</button>
-          <button id="thRestore" disabled>Restore duty</button>
-          <button id="thRestoreTable" disabled>Restore table</button>
+        <div id="thZones"><div class="msg">read the fan first</div></div>
+        <div class="row" style="margin-top:10px">
+          <button id="thRestoreAll">Restore every zone</button>
+          <span class="sub" id="thBase" style="font-family:var(--mono);font-size:11px;
+                color:var(--dimmer)">no baseline captured yet</span>
         </div>
-        <div class="sub" id="thBase" style="margin-top:7px;font-family:var(--mono);
-             font-size:11px;color:var(--dimmer)">read the fan first to capture a baseline</div>
       </div>
 
       <div class="dsec">
@@ -636,7 +633,7 @@
             <option value="1">1 &mdash; word</option>
             <option value="2">2 &mdash; set pair (write)</option>
             <option value="3">3 &mdash; get byte</option>
-            <option value="4">4 &mdash; set manual duty (write)</option>
+            <option value="4">4 &mdash; set manual duty (write, refused by SYSCON)</option>
             <option value="5" selected>5 &mdash; get manual duty</option>
             <option value="6">6 &mdash; set table (write)</option>
             <option value="7">7 &mdash; get table</option>
@@ -1694,6 +1691,152 @@ $("#klSave").onclick = () => {
   URL.revokeObjectURL(a.href);
 };
 
+/* ---------------- fan zones ---------------- */
+// What actually drives the fan.
+//
+// Opcode 4 -- set manual duty -- is refused by SYSCON on this hardware: it
+// returns -1 even when handed back the value it already holds, so no value
+// makes it work. The table is the live control instead, and every field in it
+// is 8.8 fixed point:
+//
+//   d0  setpoint, degrees C          zone 0: 0x4E00 = 78.0
+//   d1  gain                         zone 0: 0x0800 = 8.0
+//   d2  gain                         zone 0: 0x0080 = 0.5
+//
+// Opcode 8 confirms the reading exactly: its word at 16 is the measured
+// temperature and its dword at 4 is the error, and measured - setpoint equals
+// that error to the last bit. Measured on zone 0 also matches
+// sceKernelGetCpuTemperature to the degree.
+//
+// Verified live: dropping zone 1 from 50.5 to 45.0 took the fan from 292 to
+// 326 and the temperature down with it; restoring 50.5 settled it back to 300.
+const Q88 = 256;
+const q88 = v => v / Q88;
+const s88 = v => (v & 0x80000000 ? v - 0x100000000 : v) / Q88;
+
+let fanZones = [];        // live: { idx, table, setpoint, measured, error }
+let fanBaseTable = null;  // each zone's table as first read, for Restore
+
+const ZONES = [0, 1, 2];
+
+const readZones = guard(async () => {
+  const out = [];
+  for (const idx of ZONES) {
+    const t = await apiJson("fan", { op: 7, idx });
+    const s = await apiJson("fan", { op: 8, idx });
+    if (t.ret !== 0 || s.ret !== 0) continue;
+
+    const tb = hexBytes(t.hex), sb = hexBytes(s.hex);
+    const table = [0, 1, 2, 3, 4, 5].map(i => le32(tb, 4 + i * 4));
+    out.push({
+      idx, table,
+      setpoint: q88(table[0]),
+      error: s88(le32(sb, 4)),
+      measured: q88(le16(sb, 16)),
+    });
+  }
+
+  fanZones = out;
+  if (fanBaseTable === null && out.length) {
+    fanBaseTable = {};
+    for (const z of out) fanBaseTable[z.idx] = z.table.slice();
+    $("#thBase").textContent = "baseline: "
+      + out.map(z => `zone ${z.idx} ${z.setpoint.toFixed(2)} C`).join(", ");
+  }
+  renderZones();
+});
+
+const hexBytes = h => Uint8Array.from(h.match(/../g).map(x => parseInt(x, 16)));
+// >>> binds tighter than |, so the old form applied it to the last term
+// only and handed back a signed int32 -- which s88 then sign-corrected a
+// second time, turning -18.75 into -16777234.75.
+const le32 = (b, o) => ((b[o] | b[o+1] << 8 | b[o+2] << 16 | b[o+3] << 24) >>> 0);
+const le16 = (b, o) => b[o] | b[o+1] << 8;
+
+function renderZones() {
+  if (!fanZones.length) {
+    $("#thZones").innerHTML = `<div class="msg">no zone answered</div>`;
+    return;
+  }
+
+  $("#thZones").innerHTML = fanZones.map(z => {
+    // A zone reading zero has no sensor behind it and cannot drive anything.
+    const dead = z.measured === 0;
+    const base = fanBaseTable ? q88(fanBaseTable[z.idx][0]) : z.setpoint;
+    const over = z.error > 0;
+    return `<div class="stat" style="margin-bottom:9px">
+      <div class="row" style="justify-content:space-between">
+        <div class="k">zone ${z.idx}${dead ? " &mdash; no sensor" : ""}</div>
+        <div style="font-family:var(--mono);font-size:11.5px;color:var(--dim)">
+          measured <span style="color:var(--fg)">${z.measured.toFixed(2)}</span> C
+          &nbsp;&middot;&nbsp; error
+          <span style="color:${over ? "var(--warn)" : "var(--ok)"}">${
+            (z.error > 0 ? "+" : "") + z.error.toFixed(2)}</span>
+        </div>
+      </div>
+      <div class="row" style="margin-top:7px">
+        <input type="range" data-zr="${z.idx}" min="20" max="${base.toFixed(1)}"
+               step="0.25" value="${z.setpoint.toFixed(2)}" ${dead ? "disabled" : ""}>
+        <input type="number" data-zn="${z.idx}" min="20" max="${base.toFixed(1)}"
+               step="0.25" value="${z.setpoint.toFixed(2)}" style="width:86px"
+               ${dead ? "disabled" : ""}>
+        <span style="font-size:11.5px;color:var(--dim)">&deg;C</span>
+        <button data-za="${z.idx}" class="danger" ${dead ? "disabled" : ""}>Apply</button>
+        <button data-zres="${z.idx}" ${dead ? "disabled" : ""}>Restore</button>
+      </div>
+      <div class="sub" style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);
+           margin-top:5px">was ${base.toFixed(2)} C &nbsp;·&nbsp; raw ${
+        z.table.slice(0, 3).map(v => "0x" + v.toString(16)).join(" ")}</div>
+    </div>`;
+  }).join("");
+}
+
+const applyZone = guard(async (idx) => {
+  const z = fanZones.find(x => x.idx === idx);
+  if (!z) throw new Error("zone not read yet");
+
+  const deg = +$(`[data-zn="${idx}"]`).value;
+  const base = q88(fanBaseTable[idx][0]);
+  if (!isFinite(deg) || deg < 20) throw new Error("setpoint out of range");
+  if (deg > base) throw new Error(
+    `refusing ${deg} C: above the ${base.toFixed(2)} C this zone started at, `
+    + `which would cool less, not more`);
+
+  const t = z.table.slice();
+  t[0] = Math.round(deg * Q88);
+  const p = { op: 6, idx, b: 0 };
+  t.forEach((v, i) => p["d" + i] = v);
+
+  const r = await apiJson("fan", p);
+  $("#thOut").textContent = JSON.stringify(r, null, 1);
+  ev(`fan: zone ${idx} setpoint ${deg} C (was ${z.setpoint.toFixed(2)})`, "warn");
+  await readFan();
+});
+
+const restoreZone = guard(async (idx) => {
+  if (!fanBaseTable || !fanBaseTable[idx]) throw new Error("no baseline");
+  const p = { op: 6, idx, b: 0 };
+  fanBaseTable[idx].forEach((v, i) => p["d" + i] = v);
+  const r = await apiJson("fan", p);
+  $("#thOut").textContent = JSON.stringify(r, null, 1);
+  ev(`fan: zone ${idx} restored to ${q88(fanBaseTable[idx][0]).toFixed(2)} C`, "");
+  await readFan();
+});
+
+$("#thZones").addEventListener("input", e => {
+  const r = e.target.closest("[data-zr]"), n = e.target.closest("[data-zn]");
+  if (r) $(`[data-zn="${r.dataset.zr}"]`).value = r.value;
+  if (n) $(`[data-zr="${n.dataset.zn}"]`).value = n.value;
+});
+$("#thZones").addEventListener("click", e => {
+  const a = e.target.closest("[data-za]"), r = e.target.closest("[data-zres]");
+  if (a) applyZone(+a.dataset.za);
+  if (r) restoreZone(+r.dataset.zres);
+});
+$("#thRestoreAll").onclick = guard(async () => {
+  for (const idx of Object.keys(fanBaseTable || {})) await restoreZone(+idx);
+});
+
 /* ---------------- flight recorder ---------------- */
 // The sampling loop lives in serve.py, not here: it has to keep running while
 // this tab is hidden, while the page reloads, and while the console is dying.
@@ -1834,7 +1977,6 @@ $("#rcClear").onclick = guard(async () => {
 // Everything here talks to /fan, which is a thin wrapper over the nine
 // /dev/icc_fan ioctls. Opcodes 2, 4 and 6 are the only ones that write, and
 // none of them fire without a click.
-let fanBase = null;          // { duty, mode } captured on the first good read
 let fanTable = null;         // op 7 as it read on the very first open
 let lastTable = null;        // op 7 as of the most recent read
 const FAN_OPS = {
@@ -1903,59 +2045,13 @@ const readFan = guard(async () => {
   if (f.table && fanTable === null) {
     fanTable = f.table.slice();
     fillTableFields(fanTable);
-    $("#thRestoreTable").disabled = false;
   }
   if (f.table) lastTable = f.table.slice();
 
-  if (f.duty != null && fanBase === null) {
-    fanBase = { duty: f.duty, mode: f.mode };
-    $("#thDuty").disabled = $("#thDutyN").disabled = false;
-    $("#thApply").disabled = $("#thRestore").disabled = false;
-    $("#thDuty").max = f.duty > 255 ? 65535 : 255;
-    $("#thDuty").value = $("#thDutyN").value = f.duty;
-    $("#thBase").textContent =
-      `baseline captured: duty ${f.duty}, mode ${f.mode == null ? "?" : f.mode}`;
-  }
-  if (f.duty == null && fanBase === null) {
-    $("#thBase").textContent =
-      "SYSCON rejected the read, so there is no baseline to go back to - " +
-      "the duty control stays locked. Use the raw command box to explore.";
-  }
+  await readZones();
 });
 
 $("#thermRead").onclick = readFan;
-$("#thDuty").oninput = e => { $("#thDutyN").value = e.target.value; };
-$("#thDutyN").oninput = e => { $("#thDuty").value = e.target.value; };
-
-const applyDuty = guard(async () => {
-  const duty = +$("#thDutyN").value;
-  if (!isFinite(duty) || duty < 0 || duty > 65535) throw new Error("duty out of range");
-
-  if (fanBase && duty < fanBase.duty &&
-      !confirm(`This sets the fan BELOW the value it had when the panel opened `
-             + `(${duty} < ${fanBase.duty}). Less airflow than the console chose `
-             + `for itself is how hardware gets cooked. Continue?`)) return;
-
-  const r = await apiJson("fan", { op: 4, idx: 0, duty });
-  $("#thOut").textContent = JSON.stringify(r, null, 1);
-  if (r.ret !== 0 || r.status !== 0) {
-    ev(`fan: set duty ${duty} refused (ret ${r.ret}, status ${r.status})`, "warn");
-  } else {
-    ev(`fan: duty set to ${duty}`, "warn");
-  }
-  await readFan();
-});
-
-const restoreDuty = guard(async () => {
-  if (!fanBase) throw new Error("no baseline captured");
-  const r = await apiJson("fan", { op: 4, idx: 0, duty: fanBase.duty });
-  $("#thOut").textContent = JSON.stringify(r, null, 1);
-  ev(`fan: restored duty ${fanBase.duty}`, "");
-  await readFan();
-});
-
-$("#thApply").onclick = applyDuty;
-$("#thRestore").onclick = restoreDuty;
 
 function fillTableFields(t) {
   for (let i = 0; i < 6; i++) $("#thD" + i).value = t && t[i] != null ? t[i] : 0;
@@ -2002,16 +2098,6 @@ const runFanOp = guard(async () => {
 });
 $("#thRun").onclick = runFanOp;
 
-const restoreTable = guard(async () => {
-  if (!fanTable) throw new Error("no table captured");
-  const p = { op: 6, idx: 0, b: 0 };
-  fanTable.forEach((v, i) => p["d" + i] = v);
-  const r = await apiJson("fan", p);
-  $("#thOut").textContent = JSON.stringify(r, null, 1);
-  ev(`fan: table restored to ${fanTable.join(", ")}`, "");
-  await readFan();
-});
-$("#thRestoreTable").onclick = restoreTable;
 
 // Deep links, run last so every handler above already exists: ?tab=klog opens
 // that tab, &auto=1 also pulls a first round of data. Handy as a bookmark, and

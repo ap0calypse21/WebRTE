@@ -176,32 +176,58 @@ pause, resume, signal, and kill.
 
 `/dev/icc_fan` is a real character device. Its ioctl handler forwards nine commands to
 SYSCON's fan service, and one of them carries the kernel's own string
-`icc_fan_get_fan_manual_duty` — which is how the get/set duty pair was identified.
+`icc_fan_get_fan_manual_duty` — which is how the opcodes were identified.
 
 ![Thermal and fan](dashboard/docs/thermal.png)
+
+**The fan is not driven by a speed you set.** Opcode 4, set manual duty, is *refused* by
+SYSCON on retail hardware: it returns `-1` even when handed back the value it already holds,
+so no value makes it work, and `duty` reads `0000` forever.
+
+What actually drives the fan is the **table**, and every field in it is **8.8 fixed point**:
+
+| zone | `d0` setpoint | `d1` gain | `d2` gain |
+|---|---|---|---|
+| 0 | `0x4E00` = **78.0 °C** | `0x0800` = 8.0 | `0x0080` = 0.5 |
+| 1 | `0x3280` = **50.5 °C** | `0x0500` = 5.0 | `0x0005` = 0.02 |
+| 2 | `0x5000` = **80.0 °C** | `0x0800` = 8.0 | `0x0080` = 0.5 |
+
+Each zone runs a controller: the fan follows how far the measured temperature sits **above**
+its setpoint. Opcode 8 confirms the reading exactly — its word at offset 16 is the measured
+temperature, its dword at 4 is the error, and *measured − setpoint* equals that error to the
+last bit. Zone 0's measured value also matches `sceKernelGetCpuTemperature` to the degree.
+Zone 2 reads zero on this hardware: no sensor behind it, so the panel disables it.
+
+Verified live, twice: dropping zone 1 from 50.5 °C to 45.0 took the fan from **292 to 326**
+and the temperature down with it, and restoring 50.5 settled it back to **300**. Nothing
+latched.
+
+So the control is a **setpoint in °C**, per zone. Lower it and the console cools harder.
 
 | op | ioctl | what it does |
 |---|---|---|
 | 0 | `0xC0168F01` | info block, 16 bytes |
-| 1 | `0xC0148F02` | current fan value |
-| 2 | `0xC0048F03` | set pair **(writes)** |
+| 1 | `0xC0148F02` | fan output |
+| 2 | `0xC0048F03` | set byte **(writes)** |
 | 3 | `0xC0048F04` | get byte |
-| 4 | `0xC0068F05` | **set manual duty (writes)** |
+| 4 | `0xC0068F05` | set manual duty **(refused by SYSCON)** |
 | 5 | `0xC0068F06` | get manual duty |
-| 6 | `0xC01C8F07` | **set table (writes)** |
+| 6 | `0xC01C8F07` | **set table (writes) — this is the control** |
 | 7 | `0xC01C8F08` | get table |
-| 8 | `0xC0148F09` | status |
+| 8 | `0xC0148F09` | measured temperature and error |
+
+Indices 0, 1 and 2 are valid; 3 and above return `-1`.
 
 > ### ⚠ Read before touching the fan
 >
-> Writing to SYSCON **bypasses the console's automatic thermal control**. Raising the fan
-> cools harder and is the safe direction; lowering it is how hardware gets damaged.
+> **Lowering a setpoint means more cooling and is the safe direction. Raising one means
+> less.** The sliders will not go above the value each zone held when the panel opened, and
+> **Restore** puts that value back.
 >
-> Opcode 6 is the dangerous one. Sending it with an all-zero table pins the fan at full
-> speed, and **SYSCON latches that** — restoring the original table does not bring the speed
-> back down. Only a restart clears it. The panel now refuses to send an all-zero table at
-> all, pre-fills the six values from the console, and keeps a **Restore table** button
-> holding whatever was read when you opened it.
+> Writing an **all-zero table** is the one thing that genuinely bites: it means "target
+> 0 °C", the controller saturates, and SYSCON holds the fan at full speed even after the
+> table is restored — only a restart clears it. The panel refuses to send an all-zero table
+> and pre-fills the six fields from the console.
 >
 > Nothing here writes unless you click.
 

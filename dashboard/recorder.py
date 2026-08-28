@@ -37,6 +37,10 @@ POST_TRIGGER   = 20            # samples to keep collecting after an incident
 # we care about; the rest moves slowly enough to sample every few ticks.
 DEEP_EVERY = 4
 
+# Reading the fan makes the kernel log a line, so it is sampled far more slowly
+# than everything else -- about once every ten seconds at the default period.
+FAN_EVERY = 6
+
 
 class Recorder:
     def __init__(self, ip, port=771, outdir=None):
@@ -159,11 +163,17 @@ class Recorder:
                 s["uptime"] = struct.unpack_from(
                     "<q", self._kread(self._kbase + K_TIME_UPTIME, 8), 0)[0]
                 s["cp"] = self._cp_times()
-                try:
-                    f = self._json("/fan")
-                    s["fan"] = f.get("op1")
-                except (OSError, ValueError):
-                    s["fan"] = None
+
+                # The kernel prints a klog line on every fan read, so polling it
+                # at the deep rate buries the log in icc_fan_get_fan_manual_duty.
+                # It moves slowly; once every FAN_EVERY deep ticks is plenty.
+                if self.tick % (self.deep_every * FAN_EVERY) == 1:
+                    try:
+                        s["fan"] = self._json("/fan").get("op1")
+                    except (OSError, ValueError):
+                        s["fan"] = None
+                elif self._last_deep:
+                    s["fan"] = self._last_deep.get("fan")
 
             else:
                 for k in ("uptime", "cp", "fan"):
