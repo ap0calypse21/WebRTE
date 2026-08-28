@@ -614,8 +614,12 @@
           There is no speed to set &mdash; the console decides that itself. Each zone has a
           <b>temperature it starts working at</b>, and the fan spins harder the further past it
           the console gets. So you do not turn the fan up, you tell it to <b>start earlier</b>.
-          Drag right for a cooler and louder console, left for stock. Nothing is written until
-          you press Apply.
+          <br><br>
+          Two things worth knowing: a setpoint <b>above the current temperature does nothing at
+          all</b>, which is why the buttons below are measured from where the console is right
+          now rather than from stock; and the fan <b>ramps over about a minute</b> rather than
+          jumping, so watch the reading climb instead of listening for an instant change.
+          Nothing is written until you press a button or Apply.
         </div>
 
         <div class="duo" style="margin-bottom:12px">
@@ -625,10 +629,12 @@
 
         <div class="row" id="thPresets" style="margin-bottom:12px">
           <span style="font-size:11.5px;color:var(--dim)">quick</span>
-          <button data-preset="0">Stock</button>
-          <button data-preset="5">Cooler &nbsp;&minus;5&deg;</button>
-          <button data-preset="10">Colder &nbsp;&minus;10&deg;</button>
-          <button data-preset="15" class="danger">Coldest &nbsp;&minus;15&deg;</button>
+          <button data-preset="stock">Stock</button>
+          <button data-preset="5">Cooler</button>
+          <button data-preset="10">Colder</button>
+          <button data-preset="15" class="danger">Full speed</button>
+          <span style="font-size:11px;color:var(--dimmer)">measured from the current
+            temperature, not from stock</span>
         </div>
 
         <div id="thZones"><div class="msg">read the fan first</div></div>
@@ -1846,6 +1852,21 @@ function coolingOf(idx) {
   return el ? +el.value : 0;
 }
 
+// Writes one zone's setpoint, keeping the rest of its table untouched.
+async function writeSetpoint(idx, deg) {
+  const z = fanZones.find(x => x.idx === idx);
+  if (!z) throw new Error("zone not read yet");
+  const t = z.table.slice();
+  t[0] = Math.round(deg * Q88);
+  const p = { op: 6, idx, b: 0 };
+  t.forEach((v, i) => p["d" + i] = v);
+  const r = await apiJson("fan", p);
+  $("#thOut").textContent = JSON.stringify(r, null, 1);
+  ev(`fan: zone ${idx} starts at ${deg.toFixed(1)} C `
+     + `(now ${z.measured.toFixed(1)}, was ${z.setpoint.toFixed(1)})`, "warn");
+  return r;
+}
+
 const applyZone = guard(async (idx) => {
   const z = fanZones.find(x => x.idx === idx);
   if (!z) throw new Error("zone not read yet");
@@ -1855,15 +1876,7 @@ const applyZone = guard(async (idx) => {
   const deg = stock - cool;
   if (!isFinite(deg) || cool < 0 || deg < 20) throw new Error("out of range");
 
-  const t = z.table.slice();
-  t[0] = Math.round(deg * Q88);
-  const p = { op: 6, idx, b: 0 };
-  t.forEach((v, i) => p["d" + i] = v);
-
-  const r = await apiJson("fan", p);
-  $("#thOut").textContent = JSON.stringify(r, null, 1);
-  ev(cool ? `fan: zone ${idx} starts ${cool}\u00b0 earlier, at ${deg.toFixed(1)} C`
-          : `fan: zone ${idx} back to stock, ${deg.toFixed(1)} C`, "warn");
+  await writeSetpoint(idx, deg);
   await readFan();
 });
 
@@ -1890,16 +1903,30 @@ $("#thZones").addEventListener("click", e => {
   if (r) restoreZone(+r.dataset.zres);
 });
 // Every live zone at once, because picking per zone is the fiddly part.
+// Below the temperature the zone is reading right now, which is the only thing
+// that decides whether it does anything: a setpoint above the current reading
+// contributes nothing, however far below stock it looks. Zone 0 sits at 78 C
+// and idles near 55, so -15 from stock never engaged it at all.
+//
+// Measured: driving zone 0 to 15 below its reading took the fan 458 -> 1024
+// over about 50 seconds, and stock brought it back to 310 in 25.
+async function belowNow(deg) {
+  for (const z of fanZones) {
+    if (z.measured === 0) continue;
+    const target = Math.max(20, z.measured - deg);
+    await writeSetpoint(z.idx, target);
+  }
+  await readFan();
+}
+
 $("#thPresets").addEventListener("click", guard(async (e) => {
   const b = e.target.closest("[data-preset]");
   if (!b) return;
-  const cool = +b.dataset.preset;
-  for (const z of fanZones) {
-    if (z.measured === 0) continue;
-    const el = $(`[data-zr="${z.idx}"]`);
-    if (el) el.value = cool;
-    await applyZone(z.idx);
+  if (b.dataset.preset === "stock") {
+    for (const idx of Object.keys(fanBaseTable || {})) await restoreZone(+idx);
+    return;
   }
+  await belowNow(+b.dataset.preset);
 }));
 
 $("#thRestoreAll").onclick = guard(async () => {
@@ -2053,11 +2080,23 @@ const FAN_OPS = {
   5: "get manual duty", 6: "set table", 7: "get table", 8: "status"
 };
 
+let thermTimer = null;
+
 function openTherm() {
   $("#thermScrim").hidden = false;
   readFan();
+  // The fan takes about a minute to settle, so refresh while the panel is open
+  // -- otherwise a change looks like it did nothing.
+  clearInterval(thermTimer);
+  thermTimer = setInterval(() => {
+    if (!$("#thermScrim").hidden) readFan();
+  }, 5000);
 }
-function closeTherm() { $("#thermScrim").hidden = true; }
+function closeTherm() {
+  $("#thermScrim").hidden = true;
+  clearInterval(thermTimer);
+  thermTimer = null;
+}
 
 $("#thermClose").onclick = closeTherm;
 $("#thermScrim").onclick = e => { if (e.target.id === "thermScrim") closeTherm(); };

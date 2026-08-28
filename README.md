@@ -203,10 +203,17 @@ Verified live, several times: dropping zone 1 from 50.5 °C to 45.0 took the fan
 the panel's own buttons, **Colder &minus;10°** took it 303 → 357 and **Restore every zone** put
 it back to 310. Nothing latched.
 
-So the control is: **tell a zone to start working earlier.** The panel puts that on a slider
-per zone — left is stock, right is cooler and louder — with quick buttons for &minus;5, &minus;10
-and &minus;15 degrees across every live zone at once, and a live fan readout so you can watch it
-respond.
+So the control is: **tell a zone to start working earlier.** Two things about that are worth
+saying plainly, because both of them look like the control is broken:
+
+- **A setpoint above the current temperature does nothing at all.** Zone 0 ships at 78 °C and
+  idles near 55, so taking it 15 degrees below *stock* still leaves it 8 degrees above the
+  reading and it never engages. The quick buttons are therefore measured from **where the
+  console is right now**, not from stock.
+- **The fan ramps over about a minute**, it does not jump. Driving both zones 15 degrees below
+  their readings took the fan **300 → 474 → 604 → 863 → 953** and on to its 1024 ceiling;
+  pressing **Stock** brought it back down again. Watch the reading climb rather than listening
+  for an instant change — the panel refreshes itself every five seconds while it is open.
 
 **Stock means the factory values, not whatever the panel saw first.** Taking the baseline from
 the first read is wrong the moment somebody has already lowered a setpoint: restoring would put
