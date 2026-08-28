@@ -945,6 +945,131 @@ int handle_fan(int sock, struct paramdict *params) {
     return 0;
 }
 
+// -------------------------------------------------------------------------
+// Storage. Sony strips kern.disks, hw.physmem and the whole vm.stats tree, so
+// there is no sysctl route to disk usage on 13.00 -- every one of those came
+// back absent when probed against the live console. getfsstat does survive
+// though: reading the sysent table live shows 395 with sy_narg 3 and a real
+// sy_call, alongside statfs (396) and fstatfs (397).
+//
+// One call returns every mount at once, so nothing has to guess device names.
+// Called with a NULL buffer it just reports how many mounts there are.
+// -------------------------------------------------------------------------
+
+#define SYS_GETFSSTAT   395
+#define MNT_NOWAIT      2       // never block waiting on a filesystem
+#define STATFS_SIZE     0x1D8   // FreeBSD 9 struct statfs, MNAMELEN 88
+
+// Byte offsets into struct statfs. Derived from the FreeBSD 9 layout and
+// checked against the mount names the console actually returns -- if the
+// strings did not land here the response would be visibly garbled.
+#define SF_BSIZE        0x10
+#define SF_BLOCKS       0x20
+#define SF_BFREE        0x28
+#define SF_BAVAIL       0x30
+#define SF_FILES        0x38
+#define SF_FFREE        0x40
+#define SF_FLAGS        0x08
+#define SF_FSTYPENAME   0x118
+#define SF_MNTFROMNAME  0x128
+#define SF_MNTONNAME    0x180
+
+// Copies a fixed-width field out as a NUL-terminated string with the quotes
+// and backslashes JSON cannot carry escaped.
+static void sf_str(char *dst, int dstsize, const unsigned char *base, int off, int max) {
+    int i, n = 0;
+    for(i = 0; i < max && n < dstsize - 2; i++) {
+        char c = (char)base[off + i];
+        if(!c) {
+            break;
+        }
+        if(c == '"' || c == '\\') {
+            dst[n++] = '\\';
+        }
+        dst[n++] = (c < 0x20) ? ' ' : c;
+    }
+    dst[n] = 0;
+}
+
+int handle_storage(int sock, struct paramdict *params) {
+    int count = (int)syscall(SYS_GETFSSTAT, (void *)0, (long)0, MNT_NOWAIT);
+    if(count <= 0) {
+        char err[160];
+        snprintf(err, sizeof(err),
+                 "{ \"error\": \"getfsstat returned %i\", \"mounts\": [] }", count);
+        send_response(sock, 200, err);
+        return 0;
+    }
+
+    if(count > 128) {
+        count = 128;
+    }
+
+    long bufsize = (long)count * STATFS_SIZE;
+    unsigned char *buf = (unsigned char *)pfmalloc(bufsize);
+    if(!buf) {
+        return 1;
+    }
+    memset(buf, 0, bufsize);
+
+    int got = (int)syscall(SYS_GETFSSTAT, buf, bufsize, MNT_NOWAIT);
+    if(got <= 0) {
+        free(buf);
+        return 1;
+    }
+    if(got > count) {
+        got = count;
+    }
+
+    int size = got * 512 + 1024;
+    char *json = (char *)pfmalloc(size);
+    if(!json) {
+        free(buf);
+        return 1;
+    }
+    memset(json, 0, size);
+    strcat(json, "[ ");
+
+    char scratch[640];
+    char on[96], from[96], type[24];
+    int i;
+
+    for(i = 0; i < got; i++) {
+        const unsigned char *e = buf + (size_t)i * STATFS_SIZE;
+
+        sf_str(on,   sizeof(on),   e, SF_MNTONNAME,   88);
+        sf_str(from, sizeof(from), e, SF_MNTFROMNAME, 88);
+        sf_str(type, sizeof(type), e, SF_FSTYPENAME,  16);
+
+        unsigned long long bsize  = *(unsigned long long *)(e + SF_BSIZE);
+        unsigned long long blocks = *(unsigned long long *)(e + SF_BLOCKS);
+        unsigned long long bfree  = *(unsigned long long *)(e + SF_BFREE);
+        long long          bavail = *(long long *)(e + SF_BAVAIL);
+
+        // Bytes rather than blocks: the block size differs per mount, and
+        // comparing raw block counts across them would be meaningless.
+        snprintf(scratch, sizeof(scratch),
+                 "{ \"on\": \"%s\", \"from\": \"%s\", \"type\": \"%s\", "
+                 "\"bsize\": %llu, \"total\": %llu, \"free\": %llu, \"avail\": %lld, "
+                 "\"files\": %llu, \"ffree\": %lld, \"flags\": %llu }%s",
+                 on, from, type, bsize,
+                 blocks * bsize, bfree * bsize, (long long)(bavail * (long long)bsize),
+                 *(unsigned long long *)(e + SF_FILES),
+                 *(long long *)(e + SF_FFREE),
+                 *(unsigned long long *)(e + SF_FLAGS),
+                 (i == got - 1) ? "" : ",");
+        strcat(json, scratch);
+    }
+
+    strcat(json, " ]");
+    send_response(sock, 200, json);
+
+    free(json);
+    free(buf);
+
+    return 0;
+}
+
 struct api_operation operations[] = {
     { "list", handle_list },
     { "info", handle_info },
@@ -962,6 +1087,7 @@ struct api_operation operations[] = {
     { "kernbase", handle_kernbase },
     { "kread", handle_kread },
     { "fan", handle_fan },
+    { "storage", handle_storage },
     { "", 0 }
 };
 
