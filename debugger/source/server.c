@@ -19,6 +19,13 @@ struct api_operation {
     int (*handler)(int sock, struct paramdict *);
 };
 
+// Four lines per request drown the klog, and the klog is the one place a crash
+// explains itself -- a panic scrolls away behind "accepted a new client" while
+// anything is polling. Off by default; GET /verbose?on=1 brings it back.
+static int http_verbose = 0;
+
+#define vprintf(fmt, ...) do { if(http_verbose) { uprintf(fmt, ##__VA_ARGS__); } } while(0)
+
 const char *status_to_str(int status) {
     switch(status) {
         case 200:
@@ -55,7 +62,7 @@ void send_response(int sock, int status, char *body) {
 
     sceNetSend(sock, resp, size, 0);
 
-    uprintf("sent response %i content-length %i", status, size);
+    vprintf("sent response %i content-length %i", status, size);
 
     free(resp);
 }
@@ -1424,6 +1431,19 @@ int handle_kdump(int sock, struct paramdict *params) {
     return 0;
 }
 
+int handle_verbose(int sock, struct paramdict *params) {
+    char *on = paramdict_search(params, "on");
+    if(on) {
+        http_verbose = (int)strtoull(on, NULL, 0) ? 1 : 0;
+    }
+
+    char json[96];
+    snprintf(json, sizeof(json), "{ \"verbose\": %i }", http_verbose);
+    send_response(sock, 200, json);
+
+    return 0;
+}
+
 struct api_operation operations[] = {
     { "list", handle_list },
     { "info", handle_info },
@@ -1446,6 +1466,7 @@ struct api_operation operations[] = {
     { "fstat", handle_fstat },
     { "dl", handle_dl },
     { "kdump", handle_kdump },
+    { "verbose", handle_verbose },
     { "", 0 }
 };
 
@@ -1459,7 +1480,7 @@ int handle_operation(int sock, char *operation, struct paramdict *params) {
         }
 
         if(!strcmp(oper->name, operation)) {
-            uprintf("dispatching %s...", operation);
+            vprintf("dispatching %s...", operation);
             return oper->handler(sock, params);
         }
     }
@@ -1549,7 +1570,7 @@ int handle_request(int sock) {
             strncpy(operation, path, sizeof(operation));
         }
         
-        uprintf("request path: %s", path);
+        vprintf("request path: %s", path);
 
         if(handle_operation(sock, operation, pd)) {
             send_response(sock, 404, NULL);
@@ -1618,7 +1639,7 @@ int start_http_server() {
         errno = NULL;
         fd = sceNetAccept(serv, (struct sockaddr *)&client, &len);
         if(fd > -1 && !errno) {
-            uprintf("accepted a new client");
+            vprintf("accepted a new client");
 
             if(handle_request(fd)) {
                 uprintf("error handling client");
