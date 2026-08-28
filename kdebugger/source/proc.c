@@ -12,7 +12,11 @@
 // Two guards: every link must look like a kernel pointer before it is
 // dereferenced, and the walk is bounded so a corrupted list terminates.
 #define PROC_WALK_MAX   4096
-#define KVA_MIN         0xFFFFFF8000000000ULL
+// Start of the upper canonical half on amd64. proc structs are malloc'd into
+// the kernel heap (0xFFFFF8.. direct map, 0xFFFFFE.. kernel map), so the test
+// has to be the canonical boundary and not KERNBASE -- anything stricter than
+// this rejects every real proc pointer.
+#define KVA_MIN         0xFFFF800000000000ULL
 
 static inline int proc_ptr_ok(struct proc *p) {
     return p && ((uint64_t)p >= KVA_MIN);
