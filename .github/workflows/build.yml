@@ -5,9 +5,28 @@ on:
   push:
     branches:
       - main
+    # None of these change webrte.bin, so building and cutting a release for
+    # them only burns a version number. Use the Actions tab's "Run workflow"
+    # button if you ever want a build from an unchanged tree anyway.
+    paths-ignore:
+      - '**.md'
+      - 'dashboard/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/**'
+      - 'send.py'
+      - 'send.sh'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - '**.md'
+      - 'dashboard/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/**'
+      - 'send.py'
+      - 'send.sh'
 
 permissions:
   contents: write

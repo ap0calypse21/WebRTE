@@ -42,24 +42,22 @@ Three things, in order.
 **1. Send the payload.** Console jailbroken with GoldHEN, payload receiver on port 9090:
 
 ```
-python -c "import socket,sys; d=open(sys.argv[1],'rb').read(); s=socket.create_connection((sys.argv[2],9090)); s.sendall(d); s.close(); print('sent', len(d), 'bytes')" webrte.bin 192.168.1.50
+python send.py 192.168.1.50
 ```
 
-**2. Check it came up.** WebRTE listens on **771**:
+That sends `webrte.bin`, waits for port 771 to open, and reports how many
+processes the console came back with. If it does not come up, it tells you which
+stage of the load failed.
 
-```
-curl http://192.168.1.50:771/list
-```
-
-A JSON array of processes means you are in.
-
-**3. Start the dashboard** on your PC:
+**2. Start the dashboard** on your PC:
 
 ```
 python dashboard/serve.py --ip 192.168.1.50
 ```
 
 Your browser opens at `http://127.0.0.1:8080/`.
+
+Nothing here needs installing — Python 3 and its standard library, no packages.
 
 ---
 
@@ -99,13 +97,21 @@ Three more things that trip people up:
 `webrte.bin` is a flat binary payload. GoldHEN's payload receiver listens on **port 9090** —
 send the file to it and it runs.
 
-**From a terminal** (works anywhere Python does):
+**`send.py`** — any platform with Python 3, and it verifies the result:
 
 ```
-python -c "import socket,sys; d=open(sys.argv[1],'rb').read(); s=socket.create_connection((sys.argv[2],9090)); s.sendall(d); s.close(); print('sent', len(d), 'bytes')" webrte.bin 192.168.1.50
+python send.py 192.168.1.50
+python send.py 192.168.1.50 --payload path/to/webrte.bin
+python send.py 192.168.1.50 --no-wait
 ```
 
-**With netcat**, if you have it:
+**`send.sh`** — Linux and macOS, uses `socat` or `nc`:
+
+```
+./send.sh 192.168.1.50
+```
+
+**With netcat directly**, if you prefer:
 
 ```
 nc 192.168.1.50 9090 < webrte.bin
@@ -408,6 +414,8 @@ every browser sends as `%2F` — reached `open()` as three literal characters.
 - `/kread` is capped at 4 KB per request, `/kdump` at 8 MB.
 - Sampling resolution is bounded by HTTP round trips, not by the timestamps.
 - 13.00 offsets are hardcoded for 13.00. Other firmwares use their own tables.
+- Only one program can hold the klog port. The dashboard and a standalone
+  listener cannot both be connected.
 - `libkernel_web` offsets for 13.00 are still unidentified, and 26 ksdk symbols are
   deliberately left NULL rather than guessed.
 
@@ -415,12 +423,21 @@ every browser sends as `%2F` — reached `open()` as three literal characters.
 
 ## Building
 
-GitHub Actions builds `webrte.bin` on every push and attaches it to a release.
-To build locally you need `gcc` and `objcopy` for x86-64:
+GitHub Actions builds `webrte.bin` and attaches it to a release on every push that
+touches the payload. Changes confined to `dashboard/`, `README.md`, `LICENSE` or the
+workflow itself do not trigger a build, since none of them change the binary — use the
+Actions tab's **Run workflow** button if you want one anyway.
+
+To build locally you need `gcc` and `objcopy` for x86-64, and the submodules:
 
 ```
+git clone --recursive https://github.com/ap0calypse21/WebRTE
+cd WebRTE
 ./build.sh
+./build.sh clean     # rebuild everything from scratch
 ```
+
+The result is `webrte.bin` in the repository root.
 
 ---
 
