@@ -203,7 +203,8 @@ A rolling 15-minute window of process list, sensors, fan, per-core CPU, and the 
 ![Recorder](dashboard/docs/recorder.png)
 
 When the console stops answering, or its uptime jumps backwards, the whole window is frozen
-to `dashboard/incidents/` along with the surrounding klog lines. The seconds *before* a crash
+to `dashboard/incidents/` along with the surrounding klog lines. That directory is created on
+first use and is not tracked by git, so your captures stay local. The seconds *before* a crash
 are the part you cannot go back and ask for.
 
 ```
