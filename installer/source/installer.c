@@ -468,45 +468,38 @@ void patch_1100(uint64_t kernbase) {
 
 
 void patch_1300(uint64_t kernbase) {
-    // patch memcpy first
+    // GoldHEN is already loaded when this runs, and it installs its own kernel
+    // patches and FakeSelf hooks over the same paths. Re-patching the SELF
+    // authentication call, the sceSblACMgr checks, ptrace and ASLR on top of
+    // that is what takes the console down the moment an app is launched: both
+    // crashes so far landed in process creation with the payload idle.
+    //
+    // Only the patches WebRTE's own machinery depends on are applied here:
+    // kmem_alloc has to hand back RWX for the kdebugger to run from, the
+    // vm_map_protect check has to allow it, and memcpy's stack guard gets in
+    // the way of the kernel-side copies. Everything else was inherited from
+    // ps4debug, is not needed by the HTTP API, and overlaps GoldHEN.
+
+    // patch memcpy stack check
     *(uint8_t*)(kernbase + 0x2BD4ED) = 0xEB;
 
-    // patch sceSblACMgrIsAllowedSystemLevelDebugging
-    memcpy((void*)(kernbase + 0x3B2D30), "HÇÀ   Ã", 8);
-
-    // patch sceSblACMgrHasMmapSelfCapability
-    memcpy((void*)(kernbase + 0x3B2DA0), "HÇÀ   Ã", 8);
-
-    // patch sceSblACMgrIsAllowedToMmapSelf
-    memcpy((void*)(kernbase + 0x3B2DC0), "HÇÀ   Ã", 8);
-
-    // disable sysdump_perform_dump_on_fatal_trap
-    // will continue execution and give more information on crash, such as rip
-    *(uint8_t*)(kernbase + 0x76BA30) = 0xC3;
-
-    // self patches
-    memcpy((void*)(kernbase + 0x1FC4A1), "1À", 5);
-
     // patch vm_map_protect check
-    memcpy((void*)(kernbase + 0x2FC14C), "", 6);
+    memcpy((void*)(kernbase + 0x2FC14C), "\x90\x90\x90\x90\x90\x90", 6);
 
-    // patch ptrace, thanks 2much4u
-    *(uint8_t*)(kernbase + 0x3669E5) = 0xEB;
-
-    // remove all these bullshit checks from ptrace, by golden
-    memcpy((void*)(kernbase + 0x366ED1), "é|  ", 5);
-
-    // patch ASLR, thanks 2much4u
-    *(uint16_t*)(kernbase + 0x477CB4) = 0x9090;
-
-    // patch kmem_alloc
+    // patch kmem_alloc so the kdebugger's allocation comes back executable
     *(uint8_t*)(kernbase + 0x465B0C) = VM_PROT_ALL;
     *(uint8_t*)(kernbase + 0x465B14) = VM_PROT_ALL;
 
-    // ps4debug 1.1.19 additionally NOPs the kernel-address bounds check inside
-    // copyout (+0x2BD632) and copyin (+0x2BD727). Not applied here: WebRTE never
-    // calls copyin/copyout, so relaxing that check would only weaken the kernel.
+    // Deliberately not applied on 13.00, all of them GoldHEN territory:
+    //   0x3B2D30 sceSblACMgrIsAllowedSystemLevelDebugging
+    //   0x3B2DA0 sceSblACMgrHasMmapSelfCapability
+    //   0x3B2DC0 sceSblACMgrIsAllowedToMmapSelf
+    //   0x76BA30 sysdump_perform_dump_on_fatal_trap
+    //   0x1FC4A1 self patches
+    //   0x3669E5 and 0x366ED1 ptrace
+    //   0x477CB4 ASLR
 }
+
 
 void *rwx_alloc(uint64_t size) {
     uint64_t alignedSize = (size + 0x3FFFull) & ~0x3FFFull;
