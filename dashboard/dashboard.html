@@ -1,0 +1,2054 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebRTE Dashboard</title>
+<style>
+  :root{
+    --bg:#0a0d12; --panel:#12171f; --panel2:#1a212b; --line:#252d3a; --line2:#323c4d;
+    --fg:#e7edf5; --dim:#8896aa; --dimmer:#5a6779;
+    --accent:#4c9aff; --ok:#3fd68c; --warn:#ffb340; --err:#ff5c62; --exec:#c08cff;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:6px;border:2px solid var(--bg)}
+  ::-webkit-scrollbar-track{background:transparent}
+  body{margin:0;background:var(--bg);color:var(--fg);overflow:hidden;
+       font:14px/1.55 system-ui,"Segoe UI",Inter,sans-serif;-webkit-font-smoothing:antialiased}
+
+  header{display:flex;align-items:center;gap:12px;padding:0 16px;height:52px;
+         background:linear-gradient(180deg,#151b25,#11161e);
+         border-bottom:1px solid var(--line);flex:none}
+  .brand{font-size:15px;font-weight:650;letter-spacing:.2px;white-space:nowrap}
+  .brand b{color:var(--accent)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--err);flex:none;transition:.25s}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px rgba(63,214,140,.6)}
+  .spacer{flex:1}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:20px;
+        padding:3px 11px;font-size:11.5px;color:var(--dim);font-family:var(--mono);white-space:nowrap}
+  .bell{position:relative;cursor:pointer;padding:5px 9px;border-radius:8px;
+        border:1px solid var(--line);background:var(--panel2);font-size:14px}
+  .bell:hover{border-color:var(--accent)}
+  .bell.hot{border-color:var(--err);animation:pulse 1.4s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,92,98,.45)}
+                   50%{box-shadow:0 0 0 7px rgba(255,92,98,0)}}
+  .bell span{position:absolute;top:-6px;right:-6px;background:var(--err);color:#fff;
+             border-radius:10px;font-size:10px;padding:1px 5px;font-weight:700}
+
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;
+         padding:6px 12px;cursor:pointer;font-size:13px;font-family:inherit;
+         white-space:nowrap;transition:.15s}
+  button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  button:disabled{opacity:.35;cursor:not-allowed}
+  button.sm{padding:3px 9px;font-size:12px;border-radius:6px}
+  button.danger:hover{border-color:var(--err);color:var(--err);background:#2a1216}
+  button.go{background:var(--accent);border-color:var(--accent);color:#04101f;font-weight:600}
+  button.go:hover{filter:brightness(1.12);color:#04101f}
+  input,select{background:#0d1219;color:var(--fg);border:1px solid var(--line);border-radius:8px;
+        padding:6px 10px;font-family:var(--mono);font-size:13px}
+  input:focus,select:focus{outline:none;border-color:var(--accent);
+        box-shadow:0 0 0 3px rgba(76,154,255,.13)}
+  label.ck{color:var(--dim);font-size:12.5px;cursor:pointer;user-select:none;white-space:nowrap}
+
+  main{display:grid;grid-template-columns:296px 1fr;height:calc(100vh - 52px)}
+  .side{background:var(--panel);border-right:1px solid var(--line);
+        display:flex;flex-direction:column;min-height:0}
+  .side .top{padding:10px;display:flex;gap:7px;border-bottom:1px solid var(--line)}
+  .plist{list-style:none;margin:0;padding:6px;overflow:auto;flex:1}
+  .plist li{padding:7px 9px;cursor:pointer;border-radius:8px;display:flex;
+            align-items:center;gap:8px;margin-bottom:2px;transition:.12s}
+  .plist li:hover{background:var(--panel2)}
+  .plist li.sel{background:#152845;box-shadow:inset 0 0 0 1px #2a4d7d}
+  .plist .st{width:6px;height:6px;border-radius:50%;background:var(--dimmer);flex:none}
+  .plist li.watched .st{background:var(--warn);box-shadow:0 0 7px var(--warn)}
+  .plist .nm{font-family:var(--mono);font-size:12.5px;overflow:hidden;
+             text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .plist .pid{color:var(--dimmer);font-family:var(--mono);font-size:11px;flex:none}
+  .star{opacity:.25;flex:none;font-size:12px}
+  .star:hover,.plist li.watched .star{opacity:1;color:var(--warn)}
+
+  .body{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .tabs{display:flex;gap:3px;padding:9px 14px 0;border-bottom:1px solid var(--line);
+        flex:none;overflow-x:auto;background:var(--panel)}
+  .tabs button{border-radius:8px 8px 0 0;background:transparent;border-color:transparent;
+               color:var(--dim);margin-bottom:-1px}
+  .tabs button:hover{color:var(--fg)}
+  .tabs button.on{background:var(--bg);border-color:var(--line);
+                  border-bottom-color:var(--bg);color:var(--accent)}
+  section{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  section[hidden]{display:none}
+  .bar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:11px 14px;
+       border-bottom:1px solid var(--line);background:var(--panel);flex:none}
+  .bar label{color:var(--dim);font-size:12.5px;white-space:nowrap}
+  .scroll{overflow:auto;flex:1;min-height:0}
+  .hint{color:var(--dimmer);font-size:12px;padding:0 14px 10px;line-height:1.6}
+  .hint code{background:var(--panel2);padding:1px 5px;border-radius:4px;color:var(--dim)}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:11px;padding:14px}
+  /* klog */
+  pre.klog{flex:1;min-width:0;margin:0;overflow:auto;background:#070a0e;
+           border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+           font-family:var(--mono);font-size:11.5px;line-height:1.55;color:var(--fg);
+           white-space:pre-wrap;word-break:break-word}
+  pre.klog .t{color:var(--dimmer)}
+  .klside{width:290px;flex:none;display:flex;flex-direction:column;min-height:0}
+  .klside h5{margin:0 0 7px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+             color:var(--dim);font-weight:650}
+  .klev{flex:1;overflow:auto;display:flex;flex-direction:column;gap:5px}
+  .kev{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--line2);
+       border-radius:8px;padding:7px 9px}
+  .kev .kt{font-family:var(--mono);font-size:10px;color:var(--dimmer)}
+  .kev .kx{font-family:var(--mono);font-size:11px;margin-top:2px;word-break:break-word}
+  /* files + modules */
+  .crumbs{display:flex;gap:2px;align-items:center;flex-wrap:wrap;font-family:var(--mono);
+          font-size:12px;min-width:0}
+  .crumbs button{padding:3px 7px;border-radius:6px;border-color:transparent;
+                 background:transparent;color:var(--accent);font-family:var(--mono);font-size:12px}
+  .crumbs button:hover{background:var(--panel2)}
+  .crumbs span{color:var(--dimmer)}
+  .crumbs b{color:var(--fg);font-weight:600;padding:3px 4px}
+  .fl{width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)}
+  .fl th{position:sticky;top:0;background:var(--bg);text-align:left;padding:7px 10px;
+         font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);
+         font-weight:600;border-bottom:1px solid var(--line2);z-index:1}
+  .fl td{padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  .fl tr:hover td{background:var(--panel)}
+  .fl td.n{width:100%;overflow:hidden;text-overflow:ellipsis;max-width:0}
+  .fl td.num{text-align:right;color:var(--dim)}
+  .fl .ico{display:inline-block;width:17px;color:var(--dim)}
+  .fl a.dir{color:var(--accent);cursor:pointer;text-decoration:none}
+  .fl a.dir:hover{text-decoration:underline}
+  .fl .dlbtn{padding:2px 9px;font-size:11px;border-radius:6px}
+  .quick{display:flex;gap:6px;flex-wrap:wrap}
+  .quick button{padding:3px 10px;font-size:11.5px;border-radius:14px;
+                font-family:var(--mono);color:var(--dim)}
+  .quick button:hover{color:var(--fg);border-color:var(--accent)}
+  .modgrid{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+  .mod{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .mod h5{margin:0 0 6px;font-size:12.5px;font-family:var(--mono);word-break:break-all}
+  .mod .meta{font-family:var(--mono);font-size:11px;color:var(--dim);line-height:1.65}
+  .mod .seg{display:flex;gap:6px;align-items:center;font-family:var(--mono);font-size:10.5px;
+            color:var(--dimmer);margin-top:2px}
+  .mod .seg .p{width:30px}
+  .prog{height:5px;border-radius:3px;background:var(--panel2);overflow:hidden;
+        border:1px solid var(--line);margin-top:6px}
+  .prog i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+  .cores{display:grid;gap:5px;grid-template-columns:repeat(auto-fill,minmax(94px,1fr));margin-top:8px}
+  .core{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 8px}
+  .core b{font-family:var(--mono);font-size:10.5px;color:var(--dim);font-weight:600}
+  .core .cv{font-family:var(--mono);font-size:14px;margin-top:1px}
+  /* storage */
+  .mounts{width:100%;border-collapse:collapse;font-size:12px}
+  .mounts th{position:sticky;top:0;background:var(--bg);text-align:left;font-weight:600;
+             font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim);
+             padding:8px 10px;border-bottom:1px solid var(--line2);z-index:1}
+  .mounts td{padding:7px 10px;border-bottom:1px solid var(--line);font-family:var(--mono);
+             white-space:nowrap}
+  .mounts tr:hover td{background:var(--panel)}
+  .mounts td.on{color:var(--fg);font-weight:600}
+  .mounts td.from{color:var(--dimmer);max-width:230px;overflow:hidden;text-overflow:ellipsis}
+  .mounts td.num{text-align:right}
+  .bararea{min-width:150px}
+  .barout{height:7px;border-radius:4px;background:var(--panel2);overflow:hidden;
+          border:1px solid var(--line)}
+  .barin{height:100%;background:var(--ok);transition:width .3s}
+  .barin.mid{background:var(--warn)} .barin.bad{background:var(--err)}
+  .pct{font-size:10.5px;color:var(--dim);margin-top:3px}
+  .ro{color:var(--warn)}
+  /* thermal drawer */
+  .card.tap{cursor:pointer}
+  .card.tap:hover{border-color:var(--accent)}
+  .card.tap:hover h4{color:var(--accent)}
+  .card .go{position:absolute;top:9px;right:11px;font-size:11px;color:var(--dimmer)}
+  .card{position:relative}
+  .scrim{position:fixed;inset:0;background:rgba(4,7,11,.72);backdrop-filter:blur(3px);
+         z-index:40;display:flex;justify-content:flex-end}
+  .scrim[hidden]{display:none}
+  .drawer{width:min(680px,100%);height:100%;background:var(--bg);
+          border-left:1px solid var(--line2);display:flex;flex-direction:column;
+          box-shadow:-24px 0 60px rgba(0,0,0,.5);animation:slide .18s ease-out}
+  @keyframes slide{from{transform:translateX(24px);opacity:.4}to{transform:none;opacity:1}}
+  .drawer > header{display:flex;align-items:center;gap:10px;padding:13px 18px;
+                   border-bottom:1px solid var(--line);flex:none}
+  .drawer > header h3{margin:0;font-size:14px;font-weight:650;letter-spacing:.2px}
+  .drawer > header .sp{flex:1}
+  .drawer .body{flex:1;overflow:auto;padding:16px 18px 28px}
+  .dsec{margin-bottom:20px}
+  .dsec > h5{margin:0 0 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+             color:var(--dim);font-weight:650}
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .stat .k{font-size:10.5px;color:var(--dim);letter-spacing:.06em;text-transform:uppercase}
+  .stat .n{font-family:var(--mono);font-size:20px;margin-top:3px}
+  .stat .n small{font-size:11px;color:var(--dim)}
+  .kv{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px}
+  .kv td{padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .kv td:first-child{color:var(--dim);width:150px;white-space:nowrap}
+  .kv td.raw{word-break:break-all;color:var(--dimmer)}
+  .note{border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:8px;
+        background:rgba(255,179,64,.05);padding:10px 13px;font-size:12px;line-height:1.55;
+        color:var(--fg);margin-bottom:14px}
+  .note b{color:var(--warn)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .row input[type=range]{flex:1;min-width:180px;accent-color:var(--accent)}
+  .row input[type=number],.row select{background:var(--panel2);color:var(--fg);
+        border:1px solid var(--line);border-radius:7px;padding:5px 8px;
+        font-family:var(--mono);font-size:12px}
+  .danger{border-color:var(--err);color:var(--err)}
+  .danger:hover{background:rgba(255,92,98,.1)}
+  pre.out{background:#080b10;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+          font-family:var(--mono);font-size:11.5px;color:var(--dim);margin:0;
+          white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto}
+  .card{background:linear-gradient(180deg,var(--panel),#10151d);border:1px solid var(--line);
+        border-radius:10px;padding:12px 14px}
+  .card h4{margin:0 0 4px;font-size:10.5px;color:var(--dim);font-weight:650;
+           text-transform:uppercase;letter-spacing:.7px}
+  .card .v{font-family:var(--mono);font-size:23px;line-height:1.2}
+  .card .u{font-size:12px;color:var(--dim)}
+  .card .sub{font-family:var(--mono);font-size:11px;color:var(--dimmer);margin-top:3px;
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card svg{display:block;width:100%;height:28px;margin-top:7px}
+  .bad{color:var(--err)} .mid{color:var(--warn)} .good{color:var(--ok)}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid #1b222d;white-space:nowrap}
+  th{color:var(--dim);font-weight:650;position:sticky;top:0;background:var(--panel);
+     font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;cursor:pointer;user-select:none}
+  th.plain{cursor:default}
+  tbody tr:hover{background:var(--panel)}
+  .r{color:var(--ok)} .w{color:var(--warn)} .x{color:var(--exec)} .none{color:var(--dimmer)}
+
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:8px 20px;font-family:var(--mono);
+      font-size:13px;align-items:baseline;padding:16px}
+  .kv dt{color:var(--dim);white-space:nowrap}
+  .kv dd{margin:0;word-break:break-all}
+  pre{margin:0;padding:14px;font-family:var(--mono);font-size:12.5px;line-height:1.65;
+      overflow:auto;flex:1;min-height:0;white-space:pre}
+  .off{color:var(--dimmer)} .as{color:var(--accent)}
+  .msg{padding:16px;color:var(--dim);font-size:13px}
+  .msg.err{color:var(--err)}
+
+  .feed{overflow:auto;flex:1;padding:8px 10px;font-family:var(--mono);font-size:12px}
+  .ev{display:flex;gap:9px;padding:6px 9px;border-radius:7px;margin-bottom:3px;
+      border-left:3px solid var(--line2);background:#0e131a;animation:in .25s ease}
+  @keyframes in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+  .ev .t{color:var(--dimmer);flex:none}
+  .ev .m{flex:1;word-break:break-word;white-space:pre-wrap}
+  .ev.warn{border-left-color:var(--warn)} .ev.warn .m{color:var(--warn)}
+  .ev.err{border-left-color:var(--err);background:#1a1013} .ev.err .m{color:var(--err)}
+  .ev.ok{border-left-color:var(--ok)} .ev.ok .m{color:var(--ok)}
+  .split{display:grid;grid-template-columns:1fr 380px;flex:1;min-height:0}
+  @media(max-width:1150px){.split{grid-template-columns:1fr}}
+  .split > div{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+  .split .right{border-left:1px solid var(--line);background:var(--panel)}
+  .fh{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;
+      gap:8px;font-size:12px;color:var(--dim);flex:none}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">WebRTE <b>Dashboard</b></div>
+  <span class="dot" id="dot"></span>
+  <span class="chip" id="cModel">—</span>
+  <span class="chip" id="cCount">—</span>
+  <span class="chip" id="cSel">no process</span>
+  <div class="spacer"></div>
+  <label class="ck"><input type="checkbox" id="sound"> sound</label>
+  <div class="bell" id="bell" title="jump to events">&#128276;<span id="bellN" hidden>0</span></div>
+  <button id="refresh" class="sm">Refresh</button>
+</header>
+
+<main>
+  <div class="side">
+    <div class="top">
+      <input id="filter" placeholder="filter&hellip;" style="flex:1;min-width:0">
+      <button id="killSel" class="danger sm" title="SIGKILL the selected process">Kill</button>
+    </div>
+    <ul class="plist" id="plist"></ul>
+  </div>
+
+  <div class="body">
+    <div class="tabs">
+      <button data-tab="ov" class="on">Overview</button>
+      <button data-tab="proc">Process</button>
+      <button data-tab="map">Memory Map</button>
+      <button data-tab="hex">Hex Viewer</button>
+      <button data-tab="scan">Search</button>
+      <button data-tab="klog">Klog</button>
+      <button data-tab="rec">Recorder</button>
+      <button data-tab="files">Files</button>
+      <button data-tab="mod">Modules</button>
+      <button data-tab="store">Storage</button>
+      <button data-tab="kern">Kernel</button>
+      <button data-tab="alloc">Allocations</button>
+      <button data-tab="api">API Console</button>
+    </div>
+
+    <section id="tab-ov">
+      <div class="bar">
+        <span class="chip" id="cVer">&mdash;</span>
+        <div class="spacer"></div>
+        <label class="ck" title="polls /list, which walks allproc in the kernel"><input type="checkbox" id="live"> live</label>
+        <select id="rate" style="width:92px"><option value="10000">10 s</option><option value="5000">5 s</option><option value="30000">30 s</option><option value="2000">2 s</option></select>
+        <label class="ck"><input type="checkbox" id="probe"> liveness probe</label>
+        <button id="readNow" class="sm">Read now</button>
+      </div>
+      <div class="hint" style="padding:10px 14px">
+        Live polling calls <code>/list</code>, which walks <code>allproc</code> in the kernel.
+        That walk now takes the list's own shared lock and bounds itself, so a process
+        appearing or vanishing mid-walk no longer races it &mdash; the earlier version held no
+        lock and could panic. Polling still costs the console a round trip each tick, so it
+        stays off by default; the <b>Recorder</b> tab is the better tool for watching over time.
+      </div>
+      <div class="split">
+        <div><div class="grid" id="cards"></div></div>
+        <div class="right">
+          <div class="fh"><b style="color:var(--fg)">Events</b><span class="spacer"></span>
+            <span id="evCount">0</span><button id="evClear" class="sm">Clear</button></div>
+          <div class="feed" id="feed"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-proc" hidden>
+      <div class="bar">
+        <button id="pPause" class="sm">Pause</button>
+        <button id="pResume" class="sm">Resume</button>
+        <select id="sigSel" style="width:150px">
+          <option value="15">15 SIGTERM</option><option value="9">9 SIGKILL</option>
+          <option value="2">2 SIGINT</option><option value="6">6 SIGABRT</option>
+          <option value="5">5 SIGTRAP</option><option value="11">11 SIGSEGV</option>
+          <option value="10">10 SIGBUS</option><option value="8">8 SIGFPE</option>
+          <option value="4">4 SIGILL</option><option value="1">1 SIGHUP</option>
+        </select>
+        <button id="pSignal" class="danger sm">Send signal</button>
+        <div class="spacer"></div>
+        <button id="pWatch" class="sm">Watch</button>
+        <button id="pThr" class="sm">Thread info</button>
+      </div>
+      <div class="scroll"><dl class="kv" id="info"></dl></div>
+    </section>
+
+    <section id="tab-map" hidden>
+      <div class="bar">
+        <span class="chip" id="mapCount">&mdash;</span>
+        <span class="chip" id="mapTotal">&mdash;</span>
+        <input id="mapFilter" placeholder="filter by name&hellip;" style="width:170px">
+        <label class="ck"><input type="checkbox" id="onlyExec"> exec only</label>
+        <div class="spacer"></div>
+        <button id="mapCsv" class="sm">Export CSV</button>
+      </div>
+      <div class="scroll">
+        <table><thead><tr>
+          <th data-sort="name">Name</th><th data-sort="start">Start</th>
+          <th data-sort="end">End</th><th data-sort="size">Size</th>
+          <th data-sort="prot">Prot</th><th class="plain"></th>
+        </tr></thead><tbody id="mapBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="tab-hex" hidden>
+      <div class="bar">
+        <label>Address</label><input id="addr" value="0x0" style="width:165px">
+        <label>Length</label><input id="len" value="512" style="width:80px">
+        <button id="dump" class="go">Read</button>
+        <button id="prev" class="sm">&#9664;</button><button id="next" class="sm">&#9654;</button>
+        <div class="spacer"></div>
+        <input id="wdata" placeholder="write hex: 90 90 C3" style="width:200px">
+        <button id="write" class="danger sm">Write</button>
+        <button id="copyHex" class="sm">Copy</button>
+      </div>
+      <pre id="hex" class="msg">Select a process, then read an address.</pre>
+    </section>
+
+    <section id="tab-scan" hidden>
+      <div class="bar">
+        <label>Pattern</label><input id="pat" placeholder="48 89 E5" style="width:170px">
+        <label>From</label><input id="sFrom" value="0x0" style="width:140px">
+        <label>To</label><input id="sTo" value="0x0" style="width:140px">
+        <button id="scan" class="go">Scan</button>
+        <button id="stopScan" class="sm" disabled>Stop</button>
+        <div class="spacer"></div><span class="chip" id="scanStat">idle</span>
+      </div>
+      <div class="hint">Reads the range in 8&nbsp;KB chunks through <code>/read</code>.
+        Pick a range from the Memory Map first &mdash; a whole process is slow.</div>
+      <div class="scroll"><table><thead><tr><th class="plain">#</th>
+        <th class="plain">Address</th><th class="plain">Context</th><th class="plain"></th>
+      </tr></thead><tbody id="scanBody"></tbody></table></div>
+    </section>
+
+    <section id="tab-klog" hidden>
+      <div class="bar">
+        <button id="klStart" class="go">Connect</button>
+        <button id="klStop">Disconnect</button>
+        <span class="dot" id="klDot"></span>
+        <span class="chip" id="klState">not connected</span>
+        <div class="spacer"></div>
+        <label><input type="checkbox" id="klFollow" checked> follow</label>
+        <label><input type="checkbox" id="klOnlyBad"> only warnings</label>
+        <input id="klFilter" placeholder="filter&hellip;" style="width:170px">
+        <button id="klSave">Save log</button>
+        <button id="klClear">Clear</button>
+      </div>
+      <div class="hint">GoldHEN's klog server on port <b>3232</b> &mdash; turn it on in GoldHEN's
+        settings first, or this just retries. Lines are stamped the moment they arrive, to
+        microseconds, because when a console dies the order of the last few lines is the whole
+        story. WebRTE's own per-request chatter is off by default so it cannot bury a panic;
+        <code>/verbose?on=1</code> brings it back.</div>
+      <div style="display:flex;gap:10px;flex:1;min-height:0">
+        <pre id="klOut" class="klog">not connected</pre>
+        <div class="klside">
+          <h5>Timeline</h5>
+          <div id="klEvents" class="klev"><div class="msg">nothing yet</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-rec" hidden>
+      <div class="bar">
+        <button id="rcStart" class="go">Start recording</button>
+        <button id="rcStop">Stop</button>
+        <span class="dot" id="rcDot"></span>
+        <span class="chip" id="rcState">idle</span>
+        <div class="spacer"></div>
+        <label>every
+          <select id="rcRate">
+            <option value="0.25">0.25 s</option>
+            <option value="0.4" selected>0.4 s</option>
+            <option value="1">1 s</option>
+            <option value="2">2 s</option>
+          </select></label>
+        <label><input type="checkbox" id="rcDeep" checked> cpu + fan + uptime</label>
+        <button id="rcClear">Clear</button>
+      </div>
+      <div class="hint">A rolling 15-minute window of process list, sensors, fan, per-core CPU
+        and the console's own <code>time_uptime</code>, diffed sample to sample. When the console
+        stops answering or its uptime jumps backwards, the whole window is frozen to disk &mdash;
+        the seconds <b>before</b> a crash are the part you cannot go back and ask for.
+        <b>Sampling is not nanosecond-resolution</b>: each sample is an HTTP round trip, so the
+        real period is tens of milliseconds. The nanosecond stamps order events exactly; they do
+        not measure them.</div>
+      <div class="duo" style="margin:10px 0">
+        <div class="stat"><div class="k">Window</div><div class="n" id="rcSpan">-</div></div>
+        <div class="stat"><div class="k">Round trip</div><div class="n" id="rcRtt">-</div></div>
+      </div>
+      <div style="display:flex;gap:10px;flex:1;min-height:0">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+          <h5 style="margin:0 0 7px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+              color:var(--dim);font-weight:650">What changed</h5>
+          <pre id="rcChanges" class="klog">not recording</pre>
+        </div>
+        <div class="klside">
+          <h5>Frozen incidents</h5>
+          <div id="rcIncidents" class="klev"><div class="msg">none yet</div></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-files" hidden>
+      <div class="bar">
+        <div class="crumbs" id="fCrumbs"></div>
+        <div class="spacer"></div>
+        <input id="fPath" placeholder="/system/common/lib" style="width:250px">
+        <button id="fGo" class="go">Open</button>
+        <button id="fUp">Up</button>
+      </div>
+      <div class="bar" style="border-top:none">
+        <div class="quick">
+          <button data-p="/">/</button>
+          <button data-p="/system">/system</button>
+          <button data-p="/system/common/lib">/system/common/lib</button>
+          <button data-p="/system_ex">/system_ex</button>
+          <button data-p="/mnt">/mnt</button>
+          <button data-p="/mnt/sandbox">/mnt/sandbox</button>
+          <button data-p="/user">/user</button>
+          <button data-p="/data">/data</button>
+          <button data-p="/dev">/dev</button>
+        </div>
+        <div class="spacer"></div>
+        <span class="chip" id="fCount">&mdash;</span>
+      </div>
+      <div class="hint">Read-only: <code>getdirentries</code> to list, <code>stat</code> for sizes,
+        <code>open</code>+<code>read</code> to download. Nothing here writes to the console.
+        Downloads stream through the local proxy, so a large <code>.sprx</code> is fine.</div>
+      <div style="overflow:auto;flex:1">
+        <table class="fl" id="fTable"><tbody><tr><td>pick a folder above</td></tr></tbody></table>
+      </div>
+    </section>
+
+    <section id="tab-mod" hidden>
+      <div class="bar">
+        <button id="mLoad" class="go">Load modules</button>
+        <span class="chip" id="mProc">no process selected</span>
+        <div class="spacer"></div>
+        <input id="mFilter" placeholder="filter&hellip;" style="width:190px">
+        <span class="chip" id="mCount">&mdash;</span>
+      </div>
+      <div class="hint">Built from <code>/mapping</code>, which already carries a name per region &mdash;
+        the regions are just grouped back into the module they belong to. Base, size and the
+        segment split come from the entries themselves, so this costs the console nothing extra.</div>
+      <div style="overflow:auto;flex:1;padding-top:10px">
+        <div class="modgrid" id="mGrid"></div>
+      </div>
+    </section>
+
+    <section id="tab-store" hidden>
+      <div class="bar">
+        <button id="stRead" class="go">Read mounts</button>
+        <div class="spacer"></div>
+        <span class="chip" id="stCount">&mdash;</span>
+        <label><input type="checkbox" id="stAll"> show sandbox bind mounts</label>
+      </div>
+      <div class="hint">One <code>getfsstat</code> call, so every mount comes back together.
+        Sony strips <code>kern.disks</code>, <code>hw.physmem</code> and the whole
+        <code>vm.stats</code> tree on 13.00 &mdash; this is the only route to disk usage.
+        <b>Available</b> is what a normal process may still write; it is smaller than
+        <b>free</b> because the filesystem holds a reserve back.</div>
+      <div style="overflow:auto;flex:1">
+        <table class="mounts" id="stTable"><tbody>
+          <tr><td>press Read mounts</td></tr>
+        </tbody></table>
+      </div>
+    </section>
+
+    <section id="tab-kern" hidden>
+      <div class="bar">
+        <button id="kbGet" class="go">Get kernel base</button>
+        <span class="chip" id="kbVal">&mdash;</span>
+        <div class="spacer"></div>
+        <label>Address</label><input id="kAddr" placeholder="0xFFFFFFFF82200000" style="width:190px">
+        <label>Length</label><input id="kLen" value="256" style="width:80px">
+        <button id="kRead">Read</button>
+      </div>
+      <div class="bar" style="border-top:none">
+        <button id="kdLoad" class="go">Load windows</button>
+        <select id="kdWin" style="min-width:250px"></select>
+        <button id="kdSave">Download segment</button>
+        <div class="spacer"></div>
+        <button id="cpuRead">Sample CPU</button>
+      </div>
+      <div class="hint" id="kdInfo">The kernel maps two windows with an unmapped hole between
+        them. <code>sys_kern_rw</code> is a bare <code>memcpy</code> with no fault handler, so a
+        read into that hole would panic the console &mdash; the endpoint refuses any range that is
+        not wholly inside one window.</div>
+      <div class="cores" id="cCores"></div>
+      <div class="hint">Kernel memory goes through <code>sys_kern_rw</code>, capped at 4&nbsp;KB
+        per request. Reading an unmapped kernel address faults the whole console &mdash; take
+        addresses from the kernel base, do not guess them.</div>
+      <pre id="kHex" class="msg">&mdash;</pre>
+    </section>
+
+    <section id="tab-alloc" hidden>
+      <div class="bar">
+        <label>Length</label><input id="allocLen" value="0x1000" style="width:110px">
+        <button id="alloc" class="go">Allocate</button>
+        <div class="spacer"></div>
+        <label>Free</label>
+        <input id="freeAddr" placeholder="address" style="width:150px">
+        <input id="freeLen" placeholder="length" style="width:100px">
+        <button id="free" class="danger sm">Free</button>
+      </div>
+      <div class="hint">WebRTE prints the allocated address with <code>%i</code> (32-bit),
+        so a high address comes back truncated &mdash; confirm it in the Memory Map.</div>
+      <div class="scroll"><table><thead><tr><th class="plain">PID</th>
+        <th class="plain">Address</th><th class="plain">Length</th><th class="plain"></th>
+      </tr></thead><tbody id="allocBody"></tbody></table></div>
+    </section>
+
+    <section id="tab-api" hidden>
+      <div class="bar">
+        <select id="apiOp" style="width:120px">
+          <option>list</option><option>info</option><option>mapping</option>
+          <option>read</option><option>write</option><option>alloc</option>
+          <option>free</option><option>pause</option><option>resume</option>
+          <option>sensors</option><option>sysctl</option><option>signal</option>
+          <option>thrinfo</option><option>kernbase</option><option>kread</option>
+        </select>
+        <input id="apiParams" placeholder="pid=42&amp;address=0x1000&amp;length=64"
+               style="flex:1;min-width:190px">
+        <button id="apiSend" class="go">Send</button>
+        <button id="apiFill" class="sm">Fill pid</button>
+      </div>
+      <div class="hint">
+        <code>list</code> <code>kernbase</code> <code>sensors</code> take nothing &middot;
+        <code>info</code> <code>mapping</code> <code>pause</code> <code>resume</code>
+        <code>thrinfo</code> take pid &middot; <code>read</code> pid,address,length &middot;
+        <code>write</code> pid,address,length,data(b64) &middot; <code>alloc</code> pid,length &middot;
+        <code>free</code> pid,address,length &middot; <code>sysctl</code> name &middot;
+        <code>signal</code> pid,sig &middot; <code>kread</code> address,length.
+      </div>
+      <pre id="apiOut" class="msg">&mdash;</pre>
+    </section>
+  </div>
+</main>
+
+
+<div class="scrim" id="thermScrim" hidden>
+  <div class="drawer" role="dialog" aria-label="Thermal and fan">
+    <header>
+      <h3>Thermal &amp; fan</h3>
+      <span class="chip" id="thermSrc">/dev/icc_fan</span>
+      <span class="sp"></span>
+      <button id="thermRead">Read</button>
+      <button id="thermClose">Close</button>
+    </header>
+    <div class="body">
+      <div class="dsec">
+        <div class="duo">
+          <div class="stat"><div class="k">CPU</div><div class="n" id="thCpu">-</div></div>
+          <div class="stat"><div class="k">SoC</div><div class="n" id="thSoc">-</div></div>
+        </div>
+      </div>
+
+      <div class="dsec">
+        <h5>Fan &mdash; as reported by SYSCON</h5>
+        <table class="kv" id="thFan"><tr><td colspan="2">not read yet</td></tr></table>
+      </div>
+
+      <div class="dsec">
+        <h5>Manual duty</h5>
+        <div class="note" id="thWarn">
+          <b>This bypasses automatic thermal control.</b>
+          Opcode 4 hands SYSCON a fixed duty and it stops following its own curve
+          until the console is restarted or automatic mode is put back.
+          Raising the duty cools harder and is the safe direction; lowering it is
+          how hardware gets damaged. Nothing is written until you press Apply.
+        </div>
+        <div class="row">
+          <input type="range" id="thDuty" min="0" max="255" value="0" disabled>
+          <input type="number" id="thDutyN" min="0" max="65535" value="0" style="width:92px" disabled>
+          <button id="thApply" class="danger" disabled>Apply</button>
+          <button id="thRestore" disabled>Restore duty</button>
+          <button id="thRestoreTable" disabled>Restore table</button>
+        </div>
+        <div class="sub" id="thBase" style="margin-top:7px;font-family:var(--mono);
+             font-size:11px;color:var(--dimmer)">read the fan first to capture a baseline</div>
+      </div>
+
+      <div class="dsec">
+        <h5>Raw command</h5>
+        <div class="row">
+          <select id="thOp">
+            <option value="0">0 &mdash; info block (16 bytes)</option>
+            <option value="1">1 &mdash; word</option>
+            <option value="2">2 &mdash; set pair (write)</option>
+            <option value="3">3 &mdash; get byte</option>
+            <option value="4">4 &mdash; set manual duty (write)</option>
+            <option value="5" selected>5 &mdash; get manual duty</option>
+            <option value="6">6 &mdash; set table (write)</option>
+            <option value="7">7 &mdash; get table</option>
+            <option value="8">8 &mdash; status</option>
+          </select>
+          <label style="font-size:11.5px;color:var(--dim)">idx
+            <input type="number" id="thIdx" value="0" min="0" max="255" style="width:64px"></label>
+          <label style="font-size:11.5px;color:var(--dim)">b
+            <input type="number" id="thB" value="0" min="0" max="255" style="width:64px"></label>
+          <label style="font-size:11.5px;color:var(--dim)">duty
+            <input type="number" id="thRawDuty" value="0" min="0" max="65535" style="width:80px"></label>
+          <button id="thRun">Run</button>
+        </div>
+        <div class="row" id="thTableRow" hidden style="margin-top:8px">
+          <span style="font-size:11.5px;color:var(--dim)">table</span>
+          <input type="number" id="thD0" style="width:104px">
+          <input type="number" id="thD1" style="width:104px">
+          <input type="number" id="thD2" style="width:104px">
+          <input type="number" id="thD3" style="width:104px">
+          <input type="number" id="thD4" style="width:104px">
+          <input type="number" id="thD5" style="width:104px">
+          <button id="thTableReset">Reload from console</button>
+        </div>
+        <div style="height:9px"></div>
+        <pre class="out" id="thOut">no command issued</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = "/api";
+let procs = [], byPid = new Map(), sel = null, maps = [], allocs = [], lastBytes = null;
+let mapSort = { key:"start", dir:1 }, scanning = false;
+let prevNames = null, watch = new Set(), events = [], unseen = 0, sysTimer = null;
+
+const $ = s => document.querySelector(s);
+const hex = n => "0x" + BigInt(Math.trunc(Number(n))).toString(16).toUpperCase();
+const esc = s => String(s).replace(/[<&]/g, c => c === "<" ? "&lt;" : "&amp;");
+const now = () => new Date().toLocaleTimeString();
+
+/* ---------------- events ---------------- */
+function beep(freq, ms) {
+  if (!$("#sound").checked) return;
+  try {
+    const a = new (window.AudioContext || window.webkitAudioContext)();
+    const o = a.createOscillator(), g = a.createGain();
+    o.connect(g); g.connect(a.destination);
+    o.frequency.value = freq; g.gain.value = 0.06;
+    o.start(); setTimeout(() => { o.stop(); a.close(); }, ms);
+  } catch (e) {}
+}
+function ev(msg, level) {
+  events.unshift({ t: now(), msg, level: level || "" });
+  if (events.length > 300) events.pop();
+  if (level === "err" || level === "warn") {
+    unseen++; beep(level === "err" ? 660 : 480, 130);
+    $("#bellN").hidden = false; $("#bellN").textContent = unseen;
+    $("#bell").classList.add("hot");
+  }
+  renderFeed();
+}
+function renderFeed() {
+  $("#evCount").textContent = events.length;
+  $("#feed").innerHTML = events.slice(0, 120).map(e =>
+    `<div class="ev ${e.level}"><span class="t">${e.t}</span><span class="m">${esc(e.msg)}</span></div>`
+  ).join("") || `<div class="msg">nothing yet</div>`;
+}
+$("#bell").onclick = () => {
+  unseen = 0; $("#bellN").hidden = true; $("#bell").classList.remove("hot");
+  document.querySelector('.tabs button[data-tab="ov"]').click();
+};
+$("#evClear").onclick = () => { events = []; renderFeed(); };
+
+/* ---------------- api ---------------- */
+// Every endpoint that takes a pid makes the kernel walk allproc without a
+// lock, so two requests in flight at once double the window in which a
+// process can exit mid-walk and panic the console. Serialise them.
+let chain = Promise.resolve();
+const serial = fn => (chain = chain.then(fn, fn));
+
+async function api(op, params, allowEmpty) {
+  const q = params ? "?" + new URLSearchParams(params) : "";
+  const r = await serial(() => fetch(`${API}/${op}${q}`));
+  const text = await r.text();
+  if (!r.ok) throw new Error(`${op}: HTTP ${r.status}${text ? " - " + text.slice(0,110) : ""}`);
+  if (!text.trim() && !allowEmpty) throw new Error(`${op}: device rejected the request`);
+  return text;
+}
+async function apiJson(op, params) {
+  const t = await api(op, params);
+  try { return JSON.parse(t); }
+  catch (e) { throw new Error(`${op}: malformed response - ${t.slice(0,110)}`); }
+}
+const need = () => { if (sel === null) throw new Error("select a process first"); return sel; };
+const guard = fn => async (...a) => { try { await fn(...a); } catch (e) { ev(e.message, "err"); } };
+
+/* ---------------- processes + watchdog ---------------- */
+async function loadProcs() {
+  let list;
+  try { list = await apiJson("list"); }
+  catch (e) {
+    if ($("#dot").classList.contains("on")) ev("console unreachable - " + e.message, "err");
+    $("#dot").classList.remove("on"); $("#cModel").textContent = "offline";
+    return;
+  }
+  $("#dot").classList.add("on");
+  list.sort((a, b) => a.pid - b.pid);
+  const names = new Map(list.map(p => [p.name, p.pid]));
+
+  if (prevNames) {
+    for (const [n, pid] of names)
+      if (!prevNames.has(n)) ev(`started   ${n} (pid ${pid})`, watch.has(n) ? "warn" : "");
+    for (const [n, pid] of prevNames) {
+      if (!names.has(n)) ev(`EXITED    ${n} (was pid ${pid})`, watch.has(n) ? "err" : "warn");
+      // same name, different pid: it died and respawned - the crash signature
+      else if (names.get(n) !== pid)
+        ev(`RESTARTED ${n}: pid ${pid} -> ${names.get(n)}  (crash?)`, "err");
+    }
+  }
+  prevNames = names;
+  procs = list; byPid = new Map(list.map(p => [p.pid, p]));
+  if (typeof noteProcDiff === "function") noteProcDiff(list);
+  $("#cCount").textContent = list.length + " processes";
+  renderProcs();
+}
+function renderProcs() {
+  const f = $("#filter").value.toLowerCase();
+  const list = procs.filter(p => !f || p.name.toLowerCase().includes(f) || String(p.pid) === f);
+  $("#plist").innerHTML = list.map(p => {
+    const w = watch.has(p.name);
+    return `<li data-pid="${p.pid}" class="${sel === p.pid ? "sel " : ""}${w ? "watched" : ""}">
+      <span class="st"></span><span class="nm">${esc(p.name)}</span>
+      <span class="pid">${p.pid}</span>
+      <span class="star" data-w="${esc(p.name)}">${w ? "★" : "☆"}</span></li>`;
+  }).join("") || `<li class="msg">no match</li>`;
+}
+$("#plist").onclick = e => {
+  const st = e.target.closest("[data-w]");
+  if (st) {
+    const n = st.dataset.w;
+    watch.has(n) ? watch.delete(n) : watch.add(n);
+    ev(`${watch.has(n) ? "watching" : "unwatched"} ${n}`);
+    renderProcs(); return;
+  }
+  const li = e.target.closest("li[data-pid]");
+  if (!li) return;
+  sel = +li.dataset.pid;
+  const p = byPid.get(sel);
+  $("#cSel").textContent = `${p ? p.name : "?"} · ${sel}`;
+  maps = []; renderProcs(); loadInfo();
+};
+$("#filter").oninput = renderProcs;
+$("#refresh").onclick = loadProcs;
+
+// A watched process that stops answering /info is wedged even though it is
+// still in the process list - that is the only liveness signal WebRTE exposes.
+async function probeWatched() {
+  if (!$("#probe").checked || !watch.size) return;
+  for (const name of watch) {
+    const p = procs.find(x => x.name === name);
+    if (!p) continue;
+    try { await apiJson("info", { pid: p.pid }); }
+    catch (e) { ev(`NOT RESPONDING  ${name} (pid ${p.pid}) - /info failed`, "err"); }
+  }
+}
+
+/* ---------------- tabs ---------------- */
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  ["ov","proc","map","hex","scan","klog","rec","files","mod","store","kern","alloc","api"]
+    .forEach(t => $("#tab-" + t).hidden = t !== b.dataset.tab);
+  if (b.dataset.tab === "map" && sel !== null && !maps.length) loadMap();
+  if (b.dataset.tab === "store" && !mounts.length) loadMounts();
+  if (b.dataset.tab === "files" && $("#fTable").rows.length <= 1) listDir(fPath);
+  if (b.dataset.tab === "mod" && sel !== null && !modules.length) loadModules();
+  if (b.dataset.tab === "ov" && $("#live").checked) readSensors();
+});
+
+/* ---------------- process detail + control ---------------- */
+let lastInfo = null;
+async function loadInfo() {
+  if (sel === null) return;
+  $("#info").innerHTML = `<dt>loading&hellip;</dt><dd></dd>`;
+  try {
+    const i = lastInfo = await apiJson("info", { pid: sel });
+    const rows = [["pid", sel], ["name", i.name], ["path", i.path],
+                  ["title id", i.titleid], ["content id", i.contentid],
+                  ["version", i.version === "" ? "- (always empty in WebRTE)" : i.version],
+                  ["watched", watch.has(i.name) ? "yes" : "no"]];
+    $("#info").innerHTML = rows.map(([k, v]) =>
+      `<dt>${k}</dt><dd>${v === "" || v == null ? "-" : esc(v)}</dd>`).join("");
+  } catch (e) { $("#info").innerHTML = `<dt class="msg err">${esc(e.message)}</dt><dd></dd>`; }
+}
+const SIGNAMES = {1:"SIGHUP",2:"SIGINT",4:"SIGILL",5:"SIGTRAP",6:"SIGABRT",8:"SIGFPE",
+                  9:"SIGKILL",10:"SIGBUS",11:"SIGSEGV",15:"SIGTERM",17:"SIGSTOP",19:"SIGCONT"};
+async function sendSignal(pid, sig) {
+  await api("signal", { pid, sig }, true);
+  const p = byPid.get(pid);
+  ev(`sent ${SIGNAMES[sig] || sig} -> ${p ? p.name : "pid " + pid} (${pid})`,
+     (sig === 9 || sig === 15) ? "warn" : "");
+}
+$("#pSignal").onclick = guard(async () => {
+  const sig = +$("#sigSel").value, p = byPid.get(need());
+  if (!confirm(`Send ${SIGNAMES[sig] || sig} to ${p ? p.name : sel} (pid ${sel})?`)) return;
+  await sendSignal(sel, sig); setTimeout(loadProcs, 600);
+});
+$("#killSel").onclick = guard(async () => {
+  const p = byPid.get(need());
+  if (!confirm(`SIGKILL ${p ? p.name : sel} (pid ${sel})?\n\n`
+             + `Killing a system process can take the shell down with it.`)) return;
+  await sendSignal(sel, 9); setTimeout(loadProcs, 600);
+});
+$("#pPause").onclick  = guard(async () => { await sendSignal(need(), 17); });
+$("#pResume").onclick = guard(async () => { await sendSignal(need(), 19); });
+$("#pWatch").onclick = guard(async () => {
+  const p = byPid.get(need());
+  watch.has(p.name) ? watch.delete(p.name) : watch.add(p.name);
+  ev(`${watch.has(p.name) ? "watching" : "unwatched"} ${p.name}`);
+  renderProcs(); loadInfo();
+});
+$("#pThr").onclick = guard(async () => {
+  const t = await apiJson("thrinfo", { pid: need() });
+  ev(`thrinfo ${t.name || "?"}  lwpid ${t.lwpid}  prio ${t.priority}`, "ok");
+});
+
+/* ---------------- telemetry ---------------- */
+const HIST = 60, hist = {};
+const push = (k,v) => { if (v == null || !isFinite(v)) return;
+  (hist[k] = hist[k] || []).push(v); if (hist[k].length > HIST) hist[k].shift(); };
+function spark(k, color) {
+  const a = hist[k]; if (!a || a.length < 2) return "";
+  const lo = Math.min(...a), hi = Math.max(...a), r = (hi - lo) || 1;
+  const pts = a.map((v,i) => `${(i/(a.length-1)*100).toFixed(1)},${(26-(v-lo)/r*24).toFixed(1)}`);
+  return `<svg viewBox="0 0 100 28" preserveAspectRatio="none">
+    <polyline fill="none" stroke="${color}" stroke-width="1.5" points="${pts.join(" ")}"/></svg>`;
+}
+const tClass = c => c == null ? "" : c >= 80 ? "bad" : c >= 68 ? "mid" : "good";
+const gb = b => (b == null || !isFinite(b)) ? "-" : (b/1073741824).toFixed(2) + " GB";
+const mb = b => (b == null || !isFinite(b)) ? "-" : (b/1048576).toFixed(0) + " MB";
+const card = (t,v,u,s,c,k,col,tap) => `<div class="card${tap ? " tap" : ""}"${
+    tap ? ` data-tap="${tap}" title="open ${tap}"` : ""}><h4>${t}</h4>
+  ${tap ? `<span class="go">&rsaquo;</span>` : ""}
+  <div class="v ${c||""}">${v}<span class="u"> ${u||""}</span></div>
+  ${s ? `<div class="sub" title="${esc(s)}">${esc(s)}</div>` : ""}
+  ${k ? spark(k, col || "var(--accent)") : ""}</div>`;
+
+let hotWarned = false;
+async function readSensors() {
+  let s;
+  try { s = await apiJson("sensors"); }
+  catch (e) { $("#cards").innerHTML = `<div class="msg err">${esc(e.message)}</div>`; return; }
+
+  // Three separate pools, and mixing them gives nonsense. vm.swap_total is the
+  // machine's RAM (8 GB), hw.availpages is what is free system-wide, while
+  // sceKernelGetDirectMemorySize returns this process's own direct-memory
+  // budget -- which is smaller than the free figure, not larger.
+  const pg = s.pagesize || 16384;
+  const freeB = s.availpages != null ? s.availpages * pg : null;
+  const ramB = s.swap_total || null;
+  const usedPct = (ramB && freeB != null) ? (1 - freeB/ramB) * 100 : null;
+  const mlockPct = (s.mlock_total && s.mlock_avail != null)
+                   ? (1 - s.mlock_avail/s.mlock_total) * 100 : null;
+
+  push("cpu", s.cpu_temp_c); push("soc", s.soc_temp_c);
+  push("freq", s.cpu_freq_mhz); push("mem", usedPct); push("mlock", mlockPct);
+
+  const t = s.cpu_temp_c;
+  if (t != null && t >= 80 && !hotWarned) { ev(`CPU at ${t} °C`, "err"); hotWarned = true; }
+  if (t != null && t < 75) hotWarned = false;
+
+  $("#cards").innerHTML = [
+    card("CPU temperature", s.cpu_temp_c != null ? s.cpu_temp_c : "-", "°C",
+         "sceKernelGetCpuTemperature", tClass(s.cpu_temp_c), "cpu", "#ff5c62", "therm"),
+    card("SoC temperature", s.soc_temp_c != null ? s.soc_temp_c : "-", "°C",
+         "/dev/sbi sensor 0", tClass(s.soc_temp_c), "soc", "#ffb340", "therm"),
+    card("CPU frequency", s.cpu_freq_mhz != null ? s.cpu_freq_mhz : "-", "MHz",
+         s.freq_levels ? "steps " + s.freq_levels.replace(/\/-1/g, "") : "dev.cpu.0.freq",
+         "", "freq", "#4c9aff"),
+    card("System memory", usedPct == null ? "-" : usedPct.toFixed(1), "%",
+         `${gb(ramB - freeB)} used of ${gb(ramB)}`, "", "mem", "#c08cff"),
+    card("Free", gb(freeB), "", `${s.availpages != null ? s.availpages : "-"} pages x ${pg}`, ""),
+    card("mlock budget", mlockPct == null ? "-" : mlockPct.toFixed(1), "%",
+         `${mb(s.mlock_avail)} free of ${mb(s.mlock_total)}`, "", "mlock", "#3fd68c"),
+    card("Direct memory", mb(s.direct_mem_total), "", "this process's budget", ""),
+    card("Reserved", gb(s.swap_reserved), "", "vm.swap_reserved", ""),
+    card("Cores", s.ncpu != null ? s.ncpu : "-", "",
+         `TSC ${s.tsc_freq ? (s.tsc_freq/1e6).toFixed(0) + " MHz" : "-"}`, ""),
+    card("ICC max", s.icc_max != null ? s.icc_max : "-", "", "machdep.liverpool", ""),
+    card("CPU load", cpuLoadTxt, "", "summed from pc_cp_time", "", "cpuload", "#3fd68c"),
+    card("Uptime", uptimeTxt, "", "kern boottime", ""),
+    card("Watching", watch.size, "",
+         watch.size ? [...watch].join(", ") : "no processes watched", watch.size ? "mid" : ""),
+  ].join("");
+  $("#cModel").textContent = s.model ? s.model.trim() : "-";
+  $("#cVer").textContent = s.version ? s.version.split(" ")[0]
+                                     : ("osreldate " + (s.osreldate != null ? s.osreldate : "?"));
+  $("#cVer").title = s.version || "";
+}
+function live(on) {
+  clearInterval(sysTimer);
+  if (!on) return;
+  const tick = async () => {
+    if (document.visibilityState !== "visible") return;
+    await loadProcs();
+    if (!$("#tab-ov").hidden) {
+      // Order matters: these fill cpuLoadTxt and uptimeTxt, and readSensors is
+      // what paints them. Rendering first would always be one tick behind.
+      await readCpu(); await readUptime();
+      await readSensors();
+    }
+    await probeWatched();
+  };
+  tick(); sysTimer = setInterval(tick, +$("#rate").value || 5000);
+}
+$("#live").onchange = e => live(e.target.checked);
+$("#rate").onchange = () => live($("#live").checked);
+$("#readNow").onclick = () => { loadProcs(); readSensors(); readCpu(); readUptime(); };
+setInterval(renderUptime, 30000);
+$("#cards").addEventListener("click", e => {
+  const c = e.target.closest(".card[data-tap]");
+  if (c && c.dataset.tap === "therm") openTherm();
+});
+
+/* ---------------- memory map ---------------- */
+const protStr = p => [(p&1) ? '<span class="r">r</span>' : '<span class="none">-</span>',
+                      (p&2) ? '<span class="w">w</span>' : '<span class="none">-</span>',
+                      (p&4) ? '<span class="x">x</span>' : '<span class="none">-</span>'].join("");
+const human = s => s >= 1073741824 ? (s/1073741824).toFixed(1) + "G"
+                 : s >= 1048576 ? (s/1048576).toFixed(1) + "M"
+                 : s >= 1024 ? (s/1024).toFixed(0) + "K" : s + "B";
+async function loadMap() {
+  if (sel === null) return;
+  $("#mapBody").innerHTML = `<tr><td colspan="6" class="msg">loading&hellip;</td></tr>`;
+  try { maps = await apiJson("mapping", { pid: sel }); renderMap(); }
+  catch (e) { maps = [];
+    $("#mapBody").innerHTML = `<tr><td colspan="6" class="msg err">${esc(e.message)}</td></tr>`; }
+}
+function visibleMaps() {
+  const f = $("#mapFilter").value.toLowerCase(), ex = $("#onlyExec").checked;
+  const list = maps.filter(m => (!f || (m.name||"").toLowerCase().includes(f)) && (!ex || (m.prot&4)));
+  const k = mapSort.key, d = mapSort.dir;
+  return list.sort((a,b) => {
+    const va = k === "size" ? a.end-a.start : a[k], vb = k === "size" ? b.end-b.start : b[k];
+    return (typeof va === "string" ? String(va).localeCompare(String(vb)) : va - vb) * d;
+  });
+}
+function renderMap() {
+  const list = visibleMaps(), total = list.reduce((s,m) => s + (m.end-m.start), 0);
+  $("#mapCount").textContent = `${list.length} / ${maps.length} regions`;
+  $("#mapTotal").textContent = human(total);
+  $("#mapBody").innerHTML = list.map(m => `<tr>
+    <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis">${esc(m.name || "-")}</td>
+    <td>${hex(m.start)}</td><td>${hex(m.end)}</td><td>${human(m.end-m.start)}</td>
+    <td>${protStr(m.prot)}</td>
+    <td><button class="sm" data-a="${m.start}" data-e="${m.end}">View</button></td></tr>`).join("")
+    || `<tr><td colspan="6" class="msg">no regions</td></tr>`;
+}
+$("#mapFilter").oninput = renderMap;
+$("#onlyExec").onchange = renderMap;
+document.querySelectorAll("th[data-sort]").forEach(th => th.onclick = () => {
+  const k = th.dataset.sort;
+  mapSort = { key:k, dir: mapSort.key === k ? -mapSort.dir : 1 };
+  renderMap();
+});
+$("#mapBody").onclick = e => {
+  const b = e.target.closest("button[data-a]"); if (!b) return;
+  $("#addr").value = hex(+b.dataset.a);
+  $("#sFrom").value = hex(+b.dataset.a); $("#sTo").value = hex(+b.dataset.e);
+  document.querySelector('.tabs button[data-tab="hex"]').click(); dump();
+};
+$("#mapCsv").onclick = () => {
+  const rows = [["name","start","end","size","prot"],
+    ...visibleMaps().map(m => [m.name, hex(m.start), hex(m.end), m.end-m.start, m.prot])];
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([rows.map(r => r.join(",")).join("\n")], {type:"text/csv"}));
+  a.download = `mapping-${sel}.csv`; a.click(); ev("mapping exported", "ok");
+};
+
+/* ---------------- hex ---------------- */
+function b64bytes(s) {
+  const bin = atob(s.trim()), a = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
+  return a;
+}
+function hexdump(bytes, base) {
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 16) {
+    const row = bytes.slice(i, i+16);
+    const h = [...row].map(b => b.toString(16).padStart(2,"0")).join(" ");
+    const a = [...row].map(b => (b >= 32 && b < 127) ? esc(String.fromCharCode(b)) : ".").join("");
+    out += `<span class="off">${(base+BigInt(i)).toString(16).toUpperCase().padStart(12,"0")}</span>  `
+         + h.padEnd(47) + `  <span class="as">${a}</span>\n`;
+  }
+  return out;
+}
+const dump = guard(async () => {
+  need();
+  const address = $("#addr").value.trim(), length = $("#len").value.trim();
+  $("#hex").textContent = "reading…";
+  lastBytes = b64bytes(await api("read", { pid: sel, address, length }));
+  $("#hex").innerHTML = hexdump(lastBytes, BigInt(address)) || "(empty)";
+  $("#hex").classList.remove("msg");
+});
+$("#dump").onclick = dump;
+$("#addr").onkeydown = e => e.key === "Enter" && dump();
+const step = d => {
+  const n = BigInt($("#len").value.trim() || 256);
+  $("#addr").value = "0x" + (BigInt($("#addr").value.trim()) + BigInt(d)*n).toString(16).toUpperCase();
+  dump();
+};
+$("#next").onclick = () => step(1);
+$("#prev").onclick = () => step(-1);
+$("#copyHex").onclick = () => lastBytes &&
+  navigator.clipboard.writeText([...lastBytes].map(b => b.toString(16).padStart(2,"0")).join(" "))
+    .then(() => ev("bytes copied", "ok"));
+const parseHex = s => {
+  const raw = s.replace(/[^0-9a-fA-F]/g, "");
+  if (!raw || raw.length % 2) throw new Error("enter whole hex bytes, e.g. 90 90 C3");
+  return raw.match(/../g).map(h => parseInt(h, 16));
+};
+$("#write").onclick = guard(async () => {
+  need();
+  const bytes = parseHex($("#wdata").value), addr = $("#addr").value.trim();
+  if (!confirm(`Write ${bytes.length} byte(s) at ${addr} in pid ${sel}?`)) return;
+  await api("write", { pid: sel, address: addr, length: bytes.length,
+                       data: btoa(String.fromCharCode(...bytes)) }, true);
+  ev(`wrote ${bytes.length} bytes @ ${addr} (pid ${sel})`, "warn");
+  await dump();
+});
+
+/* ---------------- search ---------------- */
+$("#stopScan").onclick = () => { scanning = false; };
+$("#scan").onclick = guard(async () => {
+  need();
+  const pat = parseHex($("#pat").value);
+  const from = BigInt($("#sFrom").value.trim()), to = BigInt($("#sTo").value.trim());
+  if (to <= from) throw new Error("'To' must be greater than 'From'");
+  const CH = 8192n, total = Number(to - from);
+  scanning = true; $("#scan").disabled = true; $("#stopScan").disabled = false;
+  $("#scanBody").innerHTML = ""; let hits = 0, done = 0;
+  try {
+    for (let a = from; a < to && scanning; a += CH) {
+      const n = Number(a + CH > to ? to - a : CH);
+      let bytes;
+      try { bytes = b64bytes(await api("read", { pid: sel, address: "0x"+a.toString(16), length: n })); }
+      catch (e) { done += n; continue; }          // unreadable page, keep going
+      for (let i = 0; i + pat.length <= bytes.length; i++) {
+        let ok = true;
+        for (let j = 0; j < pat.length; j++) if (bytes[i+j] !== pat[j]) { ok = false; break; }
+        if (!ok) continue;
+        hits++;
+        const at = a + BigInt(i);
+        const ctx = [...bytes.slice(i, i + Math.min(16, bytes.length - i))]
+                      .map(b => b.toString(16).padStart(2,"0")).join(" ");
+        $("#scanBody").insertAdjacentHTML("beforeend",
+          `<tr><td>${hits}</td><td>0x${at.toString(16).toUpperCase()}</td><td>${ctx}</td>
+           <td><button class="sm" data-g="0x${at.toString(16)}">Go</button></td></tr>`);
+        if (hits >= 500) { scanning = false; ev("scan stopped at 500 hits", "warn"); break; }
+      }
+      done += n;
+      $("#scanStat").textContent = `${(done/total*100).toFixed(1)}% · ${hits} hits`;
+    }
+    $("#scanStat").textContent = `done · ${hits} hits`;
+    ev(`scan finished: ${hits} hits`, "ok");
+  } finally { scanning = false; $("#scan").disabled = false; $("#stopScan").disabled = true; }
+});
+$("#scanBody").onclick = e => {
+  const b = e.target.closest("button[data-g]"); if (!b) return;
+  $("#addr").value = b.dataset.g;
+  document.querySelector('.tabs button[data-tab="hex"]').click(); dump();
+};
+
+/* ---------------- kernel ---------------- */
+$("#kbGet").onclick = guard(async () => {
+  const r = await apiJson("kernbase");
+  const h = "0x" + BigInt(r.kernbase).toString(16).toUpperCase();
+  $("#kbVal").textContent = h;
+  if (!$("#kAddr").value.trim()) $("#kAddr").value = h;
+  ev("kernel base " + h, "ok");
+});
+$("#kRead").onclick = guard(async () => {
+  const address = $("#kAddr").value.trim(), length = $("#kLen").value.trim();
+  if (!address) throw new Error("enter a kernel address");
+  $("#kHex").textContent = "reading…";
+  const bytes = b64bytes(await api("kread", { address, length }));
+  $("#kHex").innerHTML = hexdump(bytes, BigInt(address)) || "(empty)";
+  $("#kHex").classList.remove("msg");
+});
+
+/* ---------------- allocations ---------------- */
+function renderAllocs() {
+  $("#allocBody").innerHTML = allocs.map((a,i) =>
+    `<tr><td>${a.pid}</td><td>${hex(a.address)}</td><td>${hex(a.length)}</td>
+     <td><button class="sm" data-f="${i}">Free</button>
+         <button class="sm" data-v="${i}">View</button></td></tr>`).join("")
+    || `<tr><td colspan="4" class="msg">nothing allocated from this dashboard</td></tr>`;
+}
+$("#alloc").onclick = guard(async () => {
+  need();
+  const length = $("#allocLen").value.trim();
+  const r = await apiJson("alloc", { pid: sel, length });
+  allocs.unshift({ pid: sel, address: r.address, length: Number(BigInt(length)) });
+  renderAllocs(); ev(`allocated ${length} @ ${hex(r.address)} in pid ${sel}`, "ok");
+});
+$("#free").onclick = guard(async () => {
+  need();
+  await api("free", { pid: sel, address: $("#freeAddr").value.trim(),
+                      length: $("#freeLen").value.trim() }, true);
+  ev("freed", "ok");
+});
+$("#allocBody").onclick = guard(async e => {
+  const f = e.target.closest("button[data-f]"), v = e.target.closest("button[data-v]");
+  if (f) {
+    const a = allocs[+f.dataset.f];
+    await api("free", { pid:a.pid, address:a.address, length:a.length }, true);
+    allocs.splice(+f.dataset.f, 1); renderAllocs(); ev("freed " + hex(a.address), "ok");
+  } else if (v) {
+    const a = allocs[+v.dataset.v];
+    $("#addr").value = hex(a.address); $("#len").value = Math.min(a.length, 4096);
+    document.querySelector('.tabs button[data-tab="hex"]').click(); dump();
+  }
+});
+
+/* ---------------- api console ---------------- */
+$("#apiFill").onclick = () => {
+  if (sel === null) return;
+  const p = $("#apiParams");
+  p.value = /pid=/.test(p.value) ? p.value.replace(/pid=\d*/, "pid=" + sel)
+                                 : (p.value ? `pid=${sel}&${p.value}` : `pid=${sel}`);
+};
+$("#apiSend").onclick = guard(async () => {
+  const op = $("#apiOp").value, raw = $("#apiParams").value.trim();
+  const url = `${API}/${op}` + (raw ? "?" + raw : "");
+  $("#apiOut").textContent = "…";
+  const r = await fetch(url); const t = await r.text();
+  let body = t; try { body = JSON.stringify(JSON.parse(t), null, 2); } catch (e) {}
+  $("#apiOut").textContent = `GET ${url}\nHTTP ${r.status}\n\n${body || "(empty body)"}`;
+  $("#apiOut").classList.remove("msg");
+});
+
+/* ---------------- boot ---------------- */
+renderAllocs(); renderFeed();
+ev("dashboard started - live polling is off, press Read now or enable it");
+// One read at startup so the panel is not empty; no timer until asked.
+loadProcs().then(readSensors);
+
+/* ---------------- storage ---------------- */
+// getfsstat hands back every mount in one call. The kernel reports blocks, the
+// endpoint converts to bytes, because f_bsize differs per mount.
+let mounts = [];
+
+// The console reports 128 mounts and about 120 of them are nullfs bind mounts
+// of the same few filesystems into each sandbox -- identical numbers, one row
+// per app. Filtering on "total > 0" kept every one of them, so filter on what
+// actually makes a mount distinct instead.
+const isReal = m => m.total > 0
+  && m.type !== "nullfs"
+  && !m.on.startsWith("/mnt/sandbox/");
+
+const loadMounts = guard(async () => {
+  $("#stTable").innerHTML = `<tbody><tr><td>reading...</td></tr></tbody>`;
+  try {
+    mounts = await apiJson("storage");
+  } catch (e) {
+    // Same trap as the fan panel: a 404 means the payload predates the
+    // endpoint, and leaving the table on "reading..." explains nothing.
+    mounts = [];
+    $("#stTable").innerHTML = `<tbody><tr><td>${esc(/HTTP 404/.test(e.message)
+      ? "this payload has no /storage endpoint - load webrte-1.012 or newer"
+      : e.message)}</td></tr></tbody>`;
+    throw e;
+  }
+  if (mounts.error) {
+    $("#stTable").innerHTML = `<tbody><tr><td>${esc(mounts.error)}</td></tr></tbody>`;
+    mounts = [];
+    return;
+  }
+  renderMounts();
+});
+
+function renderMounts() {
+  const show = $("#stAll").checked ? mounts : mounts.filter(isReal);
+  $("#stCount").textContent = `${show.length} of ${mounts.length} mounts`;
+
+  if (!show.length) {
+    $("#stTable").innerHTML = `<tbody><tr><td>nothing to show</td></tr></tbody>`;
+    return;
+  }
+
+  const rows = show.map(m => {
+    const used = m.total - m.free;
+    const pct = m.total ? used / m.total * 100 : 0;
+    const cls = pct >= 92 ? "bad" : pct >= 78 ? "mid" : "";
+    // MNT_RDONLY is bit 0 of f_flags.
+    const ro = (m.flags & 1) ? ` <span class="ro" title="read-only">ro</span>` : "";
+    return `<tr>
+      <td class="on">${esc(m.on)}${ro}</td>
+      <td class="from" title="${esc(m.from)}">${esc(m.from)}</td>
+      <td>${esc(m.type)}</td>
+      <td class="num">${m.total ? gb(m.total) : "-"}</td>
+      <td class="num">${m.total ? gb(used) : "-"}</td>
+      <td class="num">${m.total ? gb(m.avail) : "-"}</td>
+      <td class="bararea">${m.total ? `<div class="barout">
+          <div class="barin ${cls}" style="width:${Math.min(100,pct).toFixed(1)}%"></div>
+        </div><div class="pct">${pct.toFixed(1)}% used</div>` : ""}</td>
+    </tr>`;
+  }).join("");
+
+  $("#stTable").innerHTML = `<thead><tr>
+      <th>mounted on</th><th>device</th><th>type</th>
+      <th style="text-align:right">size</th>
+      <th style="text-align:right">used</th>
+      <th style="text-align:right">available</th>
+      <th>usage</th></tr></thead><tbody>${rows}</tbody>`;
+
+  // The user partition is the one worth shouting about.
+  const user = show.find(m => m.on === "/user") || show.find(m => m.total > 1e10);
+  if (user && user.total) {
+    const p = (user.total - user.free) / user.total * 100;
+    if (p >= 92) ev(`${user.on} is ${p.toFixed(1)}% full`, "warn");
+  }
+}
+
+$("#stRead").onclick = loadMounts;
+$("#stAll").onchange = () => { if (mounts.length) renderMounts(); };
+
+/* ---------------- files ---------------- */
+// getdirentries to list, stat for sizes, open+read to download. All read-only.
+let fPath = "/";
+
+const fmtSize = n => n == null ? "" :
+  n >= 1073741824 ? (n/1073741824).toFixed(2) + " GB" :
+  n >= 1048576 ? (n/1048576).toFixed(1) + " MB" :
+  n >= 1024 ? (n/1024).toFixed(1) + " KB" : n + " B";
+const fmtTime = t => !t ? "" : new Date(t * 1000).toISOString().slice(0, 16).replace("T", " ");
+
+function crumbs(p) {
+  const parts = p.split("/").filter(Boolean);
+  let acc = "";
+  const html = [`<button data-p="/">/</button>`];
+  parts.forEach((seg, i) => {
+    acc += "/" + seg;
+    html.push(`<span>/</span>`);
+    html.push(i === parts.length - 1
+      ? `<b>${esc(seg)}</b>`
+      : `<button data-p="${esc(acc)}">${esc(seg)}</button>`);
+  });
+  $("#fCrumbs").innerHTML = html.join("");
+}
+
+const listDir = guard(async (p) => {
+  p = (p || "/").replace(/\/+$/, "") || "/";
+  $("#fTable").innerHTML = `<tbody><tr><td>reading ${esc(p)}...</td></tr></tbody>`;
+
+  let r;
+  try {
+    r = await apiJson("ls", { path: p });
+  } catch (e) {
+    $("#fTable").innerHTML = `<tbody><tr><td>${esc(/HTTP 404/.test(e.message)
+      ? "this payload has no /ls endpoint - load webrte-1.013 or newer"
+      : e.message)}</td></tr></tbody>`;
+    throw e;
+  }
+
+  if (r.error) {
+    $("#fTable").innerHTML = `<tbody><tr><td>${esc(r.error)} (${r.ret})</td></tr></tbody>`;
+    $("#fCount").textContent = "—";
+    return;
+  }
+
+  fPath = p;
+  $("#fPath").value = p;
+  crumbs(p);
+  $("#fCount").textContent = `${r.count} entries${r.truncated ? " (truncated)" : ""}`;
+
+  // Folders first, then names, the way any file manager orders them.
+  const es = r.entries.slice().sort((a, b) =>
+    (b.dir - a.dir) || a.name.localeCompare(b.name));
+
+  const join = n => (p === "/" ? "" : p) + "/" + n;
+  const rows = es.map(e => `<tr>
+      <td class="n">${e.dir
+        ? `<span class="ico">&#128193;</span><a class="dir" data-p="${esc(join(e.name))}">${esc(e.name)}</a>`
+        : `<span class="ico">&#128196;</span>${esc(e.name)}`}</td>
+      <td class="num">${e.dir ? "" : fmtSize(e.size)}</td>
+      <td class="num">${fmtTime(e.mtime)}</td>
+      <td>${e.dir ? "" :
+        `<button class="dlbtn" data-dl="${esc(join(e.name))}">Download</button>`}</td>
+    </tr>`).join("");
+
+  $("#fTable").innerHTML = `<thead><tr>
+      <th>name</th><th style="text-align:right">size</th>
+      <th style="text-align:right">modified</th><th></th></tr></thead>
+    <tbody>${rows || `<tr><td>empty</td></tr>`}</tbody>`;
+});
+
+$("#fCrumbs").addEventListener("click", e => {
+  const b = e.target.closest("button[data-p]");
+  if (b) listDir(b.dataset.p);
+});
+$("#tab-files").addEventListener("click", e => {
+  const q = e.target.closest(".quick button[data-p]");
+  if (q) return listDir(q.dataset.p);
+  const d = e.target.closest("a.dir");
+  if (d) return listDir(d.dataset.p);
+  const dl = e.target.closest("button[data-dl]");
+  // The proxy sets Content-Disposition, so the browser saves it under its own
+  // name instead of trying to render a .sprx as text.
+  if (dl) window.location.href = `${API}/dl?path=${encodeURIComponent(dl.dataset.dl)}`;
+});
+$("#fGo").onclick = () => listDir($("#fPath").value.trim() || "/");
+$("#fPath").onkeydown = e => { if (e.key === "Enter") $("#fGo").click(); };
+$("#fUp").onclick = () => listDir(fPath.replace(/\/[^/]*$/, "") || "/");
+
+/* ---------------- modules ---------------- */
+// /mapping already names every region. Grouping them back by name turns a flat
+// region list into the module table an exploit writer actually wants.
+const loadModules = guard(async () => {
+  const pid = need();
+  $("#mProc").textContent = `pid ${pid}`;
+  $("#mGrid").innerHTML = `<div class="msg">reading...</div>`;
+
+  const regions = await apiJson("mapping", { pid });
+  const by = new Map();
+  for (const r of regions) {
+    const k = r.name || "(anonymous)";
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(r);
+  }
+
+  modules = [...by.entries()].map(([name, rs]) => {
+    const start = Math.min(...rs.map(r => r.start));
+    const end = Math.max(...rs.map(r => r.end));
+    return { name, start, end, size: end - start, regions: rs.sort((a,b) => a.start - b.start) };
+  }).sort((a, b) => a.start - b.start);
+
+  renderModules();
+});
+
+let modules = [];
+function renderModules() {
+  const q = $("#mFilter").value.trim().toLowerCase();
+  const show = q ? modules.filter(m => m.name.toLowerCase().includes(q)) : modules;
+  $("#mCount").textContent = `${show.length} of ${modules.length} modules`;
+
+  $("#mGrid").innerHTML = show.map(m => `<div class="mod">
+      <h5>${esc(m.name)}</h5>
+      <div class="meta">
+        base &nbsp;<span style="color:var(--fg)">0x${m.start.toString(16).toUpperCase()}</span><br>
+        size &nbsp;${human(m.size)} &nbsp;&middot;&nbsp; ${m.regions.length} region${m.regions.length>1?"s":""}
+      </div>
+      ${m.regions.map(r => `<div class="seg">
+         <span class="p">${protStr(r.prot)}</span>
+         <span>+0x${(r.start - m.start).toString(16)}</span>
+         <span>${human(r.end - r.start)}</span></div>`).join("")}
+    </div>`).join("") || `<div class="msg">nothing matches</div>`;
+}
+$("#mLoad").onclick = loadModules;
+$("#mFilter").oninput = () => { if (modules.length) renderModules(); };
+
+/* ---------------- cpu load + uptime ---------------- */
+// Sony strips kern.cp_time and kern.boottime, but the variables behind them are
+// still there. cp_time has no global array on this kernel -- the sysctl handler
+// sums pc_cp_time out of each pcpu -- so this walks cpuid_to_pcpu the same way.
+//
+// Every address here is BigInt. A kernel pointer like 0xFFFFFFFF991C8000 is far
+// past Number.MAX_SAFE_INTEGER, so doing this arithmetic in ordinary numbers
+// silently reads the wrong page.
+const K = {
+  boottime:      0x224C6C8n,   // struct timeval, set once at boot
+  time_uptime:   0x224C9B0n,   // seconds since boot; found by sampling for a 1 Hz counter
+  mp_maxid:      0x21D0F68n,
+  all_cpus:      0x21D0F70n,
+  cpuid_to_pcpu: 0x21ABFE0n,
+  pc_cp_time:    0x1A0n,       // 5 x int64 inside pcpu: user nice sys intr idle
+};
+
+let kbaseCache = null, pcpuCache = null, cpuPrev = null;
+let cpuLoadTxt = "-", uptimeTxt = "-";
+
+async function kread(addr, len) {
+  const b64 = await api("kread", { address: addr.toString(), length: len });
+  const bin = atob(b64.trim());
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return new DataView(out.buffer);
+}
+
+async function kbaseOf() {
+  if (kbaseCache === null) {
+    // Read the digits out of the raw text: JSON.parse would round the value
+    // before it ever reached us.
+    const t = await api("kernbase");
+    const m = t.match(/"kernbase"\s*:\s*(\d+)/);
+    if (!m) throw new Error("kernbase: unexpected response " + t.slice(0, 80));
+    kbaseCache = BigInt(m[1]);
+  }
+  return kbaseCache;
+}
+
+let bootSec = null, upSec = null;
+function renderUptime() {
+  if (upSec == null) return;
+  const d = Math.floor(upSec / 86400), h = Math.floor(upSec % 86400 / 3600),
+        m = Math.floor(upSec % 3600 / 60);
+  uptimeTxt = d ? `${d}d ${h}h ${m}m` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+const readUptime = guard(async () => {
+  const kb = await kbaseOf();
+  // time_uptime rather than a wall clock: the console's clock and this
+  // machine's are not in step, and subtracting across them gave 0m.
+  upSec = Number(await kread(kb + K.time_uptime, 8).then(dv => dv.getBigInt64(0, true)));
+  bootSec = Number(await kread(kb + K.boottime, 8).then(dv => dv.getBigInt64(0, true)));
+  renderUptime();
+});
+
+// A rate needs two samples. The first call only primes, because reporting the
+// all-time average as "now" would be a lie.
+const readCpu = guard(async () => {
+  const kb = await kbaseOf();
+
+  if (!pcpuCache) {
+    const info = await kread(kb + K.mp_maxid, 8);
+    const n = Math.min(info.getUint32(0, true) + 1, 16);
+    const dv = await kread(kb + K.cpuid_to_pcpu, n * 8);
+    pcpuCache = [];
+    for (let i = 0; i < n; i++) pcpuCache.push(dv.getBigUint64(i * 8, true));
+  }
+
+  const now = [];
+  for (const p of pcpuCache) {
+    if (!p) { now.push(null); continue; }
+    const dv = await kread(p + K.pc_cp_time, 40);
+    now.push([0,1,2,3,4].map(i => Number(dv.getBigInt64(i * 8, true))));
+  }
+
+  const prev = cpuPrev;
+  cpuPrev = now;
+  if (!prev) { $("#cCores").innerHTML = `<div class="msg">priming - press again for a rate</div>`; return; }
+
+  let busySum = 0, totSum = 0;
+  const cores = now.map((c, i) => {
+    if (!c || !prev[i]) return null;
+    const d = c.map((v, j) => v - prev[i][j]);
+    const tot = d.reduce((a, b) => a + b, 0);
+    if (tot <= 0) return { i, pct: 0 };
+    busySum += tot - d[4]; totSum += tot;
+    return { i, pct: (1 - d[4] / tot) * 100 };
+  }).filter(Boolean);
+
+  const overall = totSum ? busySum / totSum * 100 : 0;
+  push("cpuload", overall);
+  cpuLoadTxt = overall.toFixed(1) + " %";
+  $("#cCores").innerHTML = cores.map(c => `<div class="core">
+      <b>core ${c.i}</b><div class="cv">${c.pct.toFixed(0)}<span style="font-size:10px;color:var(--dim)">%</span></div>
+      <div class="prog"><i style="width:${Math.min(100,c.pct).toFixed(0)}%;background:${
+        c.pct >= 85 ? "var(--err)" : c.pct >= 55 ? "var(--warn)" : "var(--ok)"}"></i></div>
+    </div>`).join("");
+});
+
+$("#cpuRead").onclick = () => { readCpu(); readUptime(); };
+
+/* ---------------- kernel dump ---------------- */
+const loadKWindows = guard(async () => {
+  const r = await apiJson("kdump");
+  // Deliberately not touching kbaseCache: this value came through JSON.parse
+  // and is already rounded, and mixing it with the BigInt offsets would throw.
+  // kbaseOf() reads the digits out of the raw text instead.
+  $("#kdWin").innerHTML = r.windows.map((w, i) =>
+    `<option value="${i}">${w.name} &mdash; +0x${w.offset.toString(16)}, ${human(w.length)}</option>`
+  ).join("");
+  kwindows = r.windows;
+  $("#kdInfo").textContent =
+    `kernel base 0x${r.kernbase.toString(16).toUpperCase()} - `
+    + r.windows.map(w => `${w.name} ${human(w.length)}`).join(", ");
+});
+
+let kwindows = [];
+$("#kdLoad").onclick = loadKWindows;
+const KD_CHUNK = 0x400000;      // 4 MB, half what the endpoint allows
+
+$("#kdSave").onclick = guard(async () => {
+  const w = kwindows[+$("#kdWin").value];
+  if (!w) throw new Error("press Load windows first");
+
+  const btn = $("#kdSave");
+  btn.disabled = true;
+  const parts = [];
+  let done = 0;
+
+  try {
+    while (done < w.length) {
+      const n = Math.min(KD_CHUNK, w.length - done);
+      const r = await fetch(`${API}/kdump?address=${w.offset + done}&length=${n}`);
+      if (!r.ok) throw new Error(`kdump: HTTP ${r.status} at +0x${(w.offset+done).toString(16)}`);
+      parts.push(await r.blob());
+      done += n;
+      $("#kdInfo").textContent =
+        `${w.name}: ${human(done)} of ${human(w.length)} (${(done/w.length*100).toFixed(0)}%)`;
+    }
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(parts, { type: "application/octet-stream" }));
+    a.download = `kernel_${w.name}_+0x${w.offset.toString(16)}_${w.length}.bin`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    ev(`kernel ${w.name} pulled: ${human(done)}`, "");
+    $("#kdInfo").textContent = `${w.name}: ${human(done)} saved`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ---------------- klog + crash watch ---------------- */
+// The browser cannot open a raw socket, so serve.py holds the connection to
+// GoldHEN's klog server on 3232 and this polls for whatever is new. Timestamps
+// come from the bridge, taken the moment each line arrived.
+let klSeq = 0, klTimer = null, klLines = [], klOn = false;
+const KL_MAX = 6000;
+let klT0 = null;                       // first arrival, so the log reads as elapsed time
+
+const LEVEL_COLOR = {
+  panic: "var(--err)", fault: "var(--err)", signal: "var(--warn)",
+  crash: "var(--warn)", kill: "var(--warn)", mem: "var(--exec)", meta: "var(--dim)",
+};
+
+// Elapsed since the first line, to microseconds. Absolute wall time is not the
+// useful axis when you are reading a crash; distance from what came before is.
+function klStamp(ns) {
+  if (klT0 === null) klT0 = ns;
+  const us = Number((ns - klT0) / 1000n);
+  const s = Math.floor(us / 1e6);
+  return `${String(s).padStart(5)}.${String(us % 1e6).padStart(6, "0")}`;
+}
+
+const klPoll = guard(async () => {
+  const r = await fetch(`${API}/klog?since=${klSeq}`).then(x => x.json());
+
+  $("#klDot").classList.toggle("on", !!r.connected);
+  $("#klState").textContent = r.connected ? "connected 3232"
+    : r.want ? `retrying${r.error ? " - " + r.error : ""}`
+    : "not connected";
+
+  if (r.lines.length) {
+    klSeq = r.seq;
+    for (const l of r.lines) {
+      const ns = BigInt(l.ns);
+      klLines.push({ ...l, ns, stamp: klStamp(ns) });
+      if (l.level && l.level !== "meta") noteCrash(l, ns);
+    }
+    if (klLines.length > KL_MAX) klLines.splice(0, klLines.length - KL_MAX);
+    renderKlog();
+  }
+});
+
+function renderKlog() {
+  const q = $("#klFilter").value.trim().toLowerCase();
+  const bad = $("#klOnlyBad").checked;
+  const show = klLines.filter(l =>
+    (!bad || (l.level && l.level !== "meta")) &&
+    (!q || l.text.toLowerCase().includes(q)));
+
+  $("#klOut").innerHTML = show.map(l =>
+    `<span class="t">${l.stamp}</span> <span${
+      l.level ? ` style="color:${LEVEL_COLOR[l.level] || "var(--fg)"}"` : ""
+    }>${esc(l.text)}</span>`).join("\n") || "nothing matches";
+
+  if ($("#klFollow").checked) $("#klOut").scrollTop = $("#klOut").scrollHeight;
+}
+
+// ---- crash timeline ----------------------------------------------------
+// A klog hit on its own says something went wrong. Pairing it with the process
+// list says which process, and that is the part worth keeping.
+let klEvents = [], lastProcNames = null;
+
+function noteCrash(line, ns) {
+  const names = procs ? procs.map(p => p.name) : [];
+  klEvents.unshift({
+    ns, level: line.level, text: line.text,
+    procs: names.length,
+    at: new Date().toLocaleTimeString(),
+  });
+  if (klEvents.length > 200) klEvents.pop();
+  ev(`klog ${line.level}: ${line.text.slice(0, 90)}`,
+     (line.level === "panic" || line.level === "fault") ? "err" : "warn");
+  renderKlEvents();
+}
+
+// Process disappearance is the other half. The watchdog already polls /list, so
+// this only has to notice what left between two polls.
+function noteProcDiff(now) {
+  const names = now.map(p => p.name);
+  if (lastProcNames) {
+    const gone = lastProcNames.filter(n => !names.includes(n));
+    const born = names.filter(n => !lastProcNames.includes(n));
+    for (const g of gone) {
+      klEvents.unshift({ ns: BigInt(Date.now()) * 1000000n, level: "kill",
+        text: `process disappeared: ${g}`, procs: names.length,
+        at: new Date().toLocaleTimeString() });
+      ev(`process gone: ${g}`, "warn");
+    }
+    for (const b of born) {
+      klEvents.unshift({ ns: BigInt(Date.now()) * 1000000n, level: "",
+        text: `process started: ${b}`, procs: names.length,
+        at: new Date().toLocaleTimeString() });
+    }
+    if (gone.length || born.length) {
+      if (klEvents.length > 200) klEvents.length = 200;
+      renderKlEvents();
+    }
+  }
+  lastProcNames = names;
+}
+
+function renderKlEvents() {
+  $("#klEvents").innerHTML = klEvents.slice(0, 60).map(e =>
+    `<div class="kev" style="border-left-color:${LEVEL_COLOR[e.level] || "var(--line2)"}">
+       <div class="kt">${e.at} &middot; ${e.procs} procs</div>
+       <div class="kx">${esc(e.text.slice(0, 220))}</div>
+     </div>`).join("") || `<div class="msg">nothing yet</div>`;
+}
+
+const klStart = guard(async () => {
+  await fetch(`${API}/klog?action=start&since=${klSeq}`);
+  klOn = true;
+  clearInterval(klTimer);
+  // Half a second: fast enough that a dying console still delivers its last
+  // lines, slow enough that it costs the page nothing.
+  klTimer = setInterval(klPoll, 500);
+  klPoll();
+});
+
+$("#klStart").onclick = klStart;
+$("#klStop").onclick = guard(async () => {
+  clearInterval(klTimer); klTimer = null; klOn = false;
+  await fetch(`${API}/klog?action=stop`);
+  $("#klDot").classList.remove("on");
+  $("#klState").textContent = "not connected";
+});
+$("#klClear").onclick = guard(async () => {
+  await fetch(`${API}/klog?action=clear`);
+  klLines = []; klEvents = []; klT0 = null;
+  renderKlog(); renderKlEvents();
+});
+$("#klFilter").oninput = renderKlog;
+$("#klOnlyBad").onchange = renderKlog;
+$("#klSave").onclick = () => {
+  const body = klLines.map(l => `${l.stamp}  ${l.level ? "[" + l.level + "] " : ""}${l.text}`).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([body], { type: "text/plain" }));
+  a.download = `klog_${new Date().toISOString().replace(/[:.]/g, "-")}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+/* ---------------- flight recorder ---------------- */
+// The sampling loop lives in serve.py, not here: it has to keep running while
+// this tab is hidden, while the page reloads, and while the console is dying.
+let rcSeq = 0, rcTimer = null, rcChanges = [], rcT0 = null, rcLive = false;
+
+const RC_COLOR = {
+  gone: "var(--err)", reboot: "var(--err)", "proc-": "var(--warn)",
+  "proc+": "var(--ok)", back: "var(--ok)", temp: "var(--exec)",
+  slow: "var(--warn)", cpu: "var(--warn)", fan: "var(--accent)", freq: "var(--dim)",
+};
+
+// Elapsed since the first change, to microseconds. perf_counter_ns on the
+// proxy side, so the ordering is exact even where the interval is not.
+function rcStamp(t) {
+  if (rcT0 === null) rcT0 = t;
+  const us = Math.round((t - rcT0) / 1000);
+  return `${String(Math.floor(us / 1e6)).padStart(4)}.${String(us % 1e6).padStart(6, "0")}`;
+}
+
+const rcPoll = guard(async () => {
+  const r = await fetch(`${API}/rec?since=${rcSeq}`).then(x => x.json());
+
+  rcLive = !!r.want;
+  $("#rcDot").classList.toggle("on", !!(r.want && r.ok));
+  $("#rcState").textContent = !r.want ? "idle"
+    : r.armed ? "INCIDENT - capturing"
+    : !r.alive ? `stopped: ${r.stopped || "thread not running"}`
+    : r.ok ? `recording, ${r.samples} samples`
+    : `console not answering${r.error ? " - " + r.error : ""}`;
+  $("#rcSpan").innerHTML = r.span_s
+    ? `${(r.span_s / 60).toFixed(1)} <small>min</small>` : "-";
+  $("#rcRtt").innerHTML = r.rtt_ms != null
+    ? `${r.rtt_ms} <small>ms</small>` : "-";
+
+  if (r.changes && r.changes.length) {
+    rcSeq = r.seq;
+    for (const c of r.changes) {
+      rcChanges.push({ ...c, stamp: rcStamp(c.t) });
+      if (c.kind === "gone" || c.kind === "reboot") ev(`recorder: ${c.text}`, "err");
+      else if (c.kind === "proc-") ev(`recorder: ${c.text}`, "warn");
+    }
+    if (rcChanges.length > 4000) rcChanges.splice(0, rcChanges.length - 4000);
+  }
+  renderChanges();
+
+  renderIncidents(r.incidents || []);
+});
+
+function renderChanges() {
+  $("#rcChanges").innerHTML = rcChanges.slice(-800).map(c =>
+    `<span class="t">${c.stamp}</span> <span style="color:${
+      RC_COLOR[c.kind] || "var(--fg)"}">${esc(c.kind.padEnd(6))}</span> ${esc(c.text)}`
+  ).join("\n") || (rcLive ? "recording \u2014 nothing has changed yet"
+                          : "not recording");
+  $("#rcChanges").scrollTop = $("#rcChanges").scrollHeight;
+}
+
+function renderIncidents(list) {
+  $("#rcIncidents").innerHTML = list.map(i =>
+    `<div class="kev" style="border-left-color:var(--err)">
+       <div class="kt">${new Date(i.at / 1e6).toLocaleString()}</div>
+       <div class="kx">${esc(i.text)}</div>
+       <div class="kt" style="margin-top:3px">${i.samples} samples &middot;
+         ${i.changes} changes &middot; ${i.klog} klog lines</div>
+       <div style="margin-top:5px;display:flex;gap:5px">
+         <button class="dlbtn" data-inc="${esc(i.file)}">Analyse</button>
+         <a class="dlbtn" style="text-decoration:none;padding:3px 9px;border:1px solid var(--line);
+            border-radius:6px;color:var(--fg)"
+            href="${API}/rec?action=incident&file=${encodeURIComponent(i.file)}"
+            download="${esc(i.file)}">Save</a>
+       </div>
+     </div>`).join("") || `<div class="msg">none yet</div>`;
+}
+
+// Reading an incident back is where the answer actually is: what the last
+// samples looked like, and which klog line landed nearest the trigger.
+const analyseIncident = guard(async (file) => {
+  const d = await fetch(`${API}/rec?action=incident&file=${encodeURIComponent(file)}`)
+    .then(x => x.json());
+  if (d.error) throw new Error(d.error);
+
+  const at = d.trigger.at;
+  const near = (d.klog || []).filter(l => Math.abs(l.ns - at) < 10e9);
+  const last = (d.samples || []).filter(s => s.ok).slice(-1)[0];
+  const tail = (d.changes || []).slice(-40);
+
+  const out = [];
+  out.push(`TRIGGER  ${d.trigger.kind}: ${d.trigger.text}`);
+  out.push(`         ${new Date(at / 1e6).toLocaleString()}`);
+  out.push("");
+  if (last) {
+    out.push(`LAST GOOD SAMPLE  ${(last.procs ? Object.keys(last.procs).length : 0)} processes, `
+           + `cpu ${last.cpu_c ?? "?"} C, soc ${last.soc_c ?? "?"} C, `
+           + `${last.mhz ?? "?"} MHz, rtt ${(last.rtt_us / 1000).toFixed(0)} ms`);
+    if (last.uptime != null) out.push(`         uptime ${last.uptime}s at that moment`);
+    out.push("");
+  }
+  out.push(`CHANGES leading up (${tail.length} of ${d.changes.length})`);
+  for (const c of tail) {
+    out.push(`  ${((c.t - d.trigger.t0 || 0) / 1e9).toFixed(3).padStart(9)}  `
+           + `${c.kind.padEnd(6)} ${c.text}`);
+  }
+  out.push("");
+  out.push(`KLOG within 10 s of the trigger (${near.length} lines)`);
+  for (const l of near.slice(-60)) {
+    const rel = ((l.ns - at) / 1e9).toFixed(3);
+    out.push(`  ${(rel > 0 ? "+" : "") + rel}s  ${l.level ? "[" + l.level + "] " : ""}${l.text}`);
+  }
+
+  $("#rcChanges").textContent = out.join("\n");
+  $("#rcChanges").scrollTop = 0;
+});
+
+$("#rcIncidents").addEventListener("click", e => {
+  const b = e.target.closest("button[data-inc]");
+  if (b) analyseIncident(b.dataset.inc);
+});
+
+$("#rcStart").onclick = guard(async () => {
+  const p = $("#rcRate").value, deep = $("#rcDeep").checked ? 1 : 0;
+  await fetch(`${API}/rec?action=start&period=${p}&deep=${deep}`);
+  clearInterval(rcTimer);
+  rcTimer = setInterval(rcPoll, 1000);
+  rcPoll();
+});
+$("#rcStop").onclick = guard(async () => {
+  clearInterval(rcTimer); rcTimer = null;
+  await fetch(`${API}/rec?action=stop`);
+  rcPoll();
+});
+$("#rcClear").onclick = guard(async () => {
+  await fetch(`${API}/rec?action=clear`);
+  rcChanges = []; rcSeq = 0; rcT0 = null;
+  renderChanges();
+});
+
+/* ---------------- thermal + fan drawer ---------------- */
+// Everything here talks to /fan, which is a thin wrapper over the nine
+// /dev/icc_fan ioctls. Opcodes 2, 4 and 6 are the only ones that write, and
+// none of them fire without a click.
+let fanBase = null;          // { duty, mode } captured on the first good read
+let fanTable = null;         // op 7 as it read on the very first open
+let lastTable = null;        // op 7 as of the most recent read
+const FAN_OPS = {
+  0: "info block", 1: "word", 2: "set pair", 3: "get byte", 4: "set manual duty",
+  5: "get manual duty", 6: "set table", 7: "get table", 8: "status"
+};
+
+function openTherm() {
+  $("#thermScrim").hidden = false;
+  readFan();
+}
+function closeTherm() { $("#thermScrim").hidden = true; }
+
+$("#thermClose").onclick = closeTherm;
+$("#thermScrim").onclick = e => { if (e.target.id === "thermScrim") closeTherm(); };
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !$("#thermScrim").hidden) closeTherm();
+});
+
+const fanRow = (k, v) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`;
+
+const readFan = guard(async () => {
+  $("#thFan").innerHTML = fanRow("", "reading...");
+
+  // Temperatures come from /sensors, the fan from /fan -- two endpoints, so
+  // the panel stays useful even when one of them fails.
+  try {
+    const s = await apiJson("sensors");
+    $("#thCpu").innerHTML = (s.cpu_temp_c != null ? s.cpu_temp_c : "-") + " <small>degC</small>";
+    $("#thSoc").innerHTML = (s.soc_temp_c != null ? s.soc_temp_c : "-") + " <small>degC</small>";
+  } catch (e) { /* the fan half is still worth showing */ }
+
+  let f;
+  try {
+    f = await apiJson("fan", { idx: 0 });
+  } catch (e) {
+    // A 404 here means the payload predates the endpoint. Saying so beats
+    // leaving the panel sitting on "reading..." with no explanation.
+    $("#thFan").innerHTML = fanRow("error", esc(/HTTP 404/.test(e.message)
+      ? "this payload has no /fan endpoint - load webrte-1.011 or newer"
+      : e.message));
+    throw e;
+  }
+
+  if (f.error) {
+    $("#thFan").innerHTML = fanRow("error", esc(f.error) + " (fd " + f.fd + ")");
+    ev("fan: " + f.error, "warn");
+    return;
+  }
+
+  const rows = [];
+  rows.push(fanRow("duty (op 5)", f.duty == null ? "<span style='color:var(--dimmer)'>rejected</span>"
+    : `<b>${f.duty}</b> &nbsp;<span style="color:var(--dimmer)">0x${f.duty.toString(16).padStart(4,"0")}</span>`));
+  rows.push(fanRow("mode (op 3)", f.mode == null ? "rejected" : f.mode));
+  rows.push(fanRow("op 1", f.op1 == null ? "rejected" : f.op1));
+  rows.push(fanRow("table (op 7)", f.table ? f.table.join(", ") : "rejected"));
+  rows.push(fanRow("status (op 8)", f.op8 ? f.op8.join(", ") : "rejected"));
+  rows.push(fanRow("info (op 0)", f.op0 == null ? "rejected"
+    : `<span class="raw">${esc(f.op0)}</span> &nbsp;byte ${f.op0_byte}`));
+  $("#thFan").innerHTML = rows.join("");
+
+  // Capture the baseline once, so Restore always has something true to go back
+  // to rather than a value this session already changed.
+  // Keep the table under its own guard: op 7 can succeed when op 5 does not,
+  // and the table is the field that actually drives the fan.
+  if (f.table && fanTable === null) {
+    fanTable = f.table.slice();
+    fillTableFields(fanTable);
+    $("#thRestoreTable").disabled = false;
+  }
+  if (f.table) lastTable = f.table.slice();
+
+  if (f.duty != null && fanBase === null) {
+    fanBase = { duty: f.duty, mode: f.mode };
+    $("#thDuty").disabled = $("#thDutyN").disabled = false;
+    $("#thApply").disabled = $("#thRestore").disabled = false;
+    $("#thDuty").max = f.duty > 255 ? 65535 : 255;
+    $("#thDuty").value = $("#thDutyN").value = f.duty;
+    $("#thBase").textContent =
+      `baseline captured: duty ${f.duty}, mode ${f.mode == null ? "?" : f.mode}`;
+  }
+  if (f.duty == null && fanBase === null) {
+    $("#thBase").textContent =
+      "SYSCON rejected the read, so there is no baseline to go back to - " +
+      "the duty control stays locked. Use the raw command box to explore.";
+  }
+});
+
+$("#thermRead").onclick = readFan;
+$("#thDuty").oninput = e => { $("#thDutyN").value = e.target.value; };
+$("#thDutyN").oninput = e => { $("#thDuty").value = e.target.value; };
+
+const applyDuty = guard(async () => {
+  const duty = +$("#thDutyN").value;
+  if (!isFinite(duty) || duty < 0 || duty > 65535) throw new Error("duty out of range");
+
+  if (fanBase && duty < fanBase.duty &&
+      !confirm(`This sets the fan BELOW the value it had when the panel opened `
+             + `(${duty} < ${fanBase.duty}). Less airflow than the console chose `
+             + `for itself is how hardware gets cooked. Continue?`)) return;
+
+  const r = await apiJson("fan", { op: 4, idx: 0, duty });
+  $("#thOut").textContent = JSON.stringify(r, null, 1);
+  if (r.ret !== 0 || r.status !== 0) {
+    ev(`fan: set duty ${duty} refused (ret ${r.ret}, status ${r.status})`, "warn");
+  } else {
+    ev(`fan: duty set to ${duty}`, "warn");
+  }
+  await readFan();
+});
+
+const restoreDuty = guard(async () => {
+  if (!fanBase) throw new Error("no baseline captured");
+  const r = await apiJson("fan", { op: 4, idx: 0, duty: fanBase.duty });
+  $("#thOut").textContent = JSON.stringify(r, null, 1);
+  ev(`fan: restored duty ${fanBase.duty}`, "");
+  await readFan();
+});
+
+$("#thApply").onclick = applyDuty;
+$("#thRestore").onclick = restoreDuty;
+
+function fillTableFields(t) {
+  for (let i = 0; i < 6; i++) $("#thD" + i).value = t && t[i] != null ? t[i] : 0;
+}
+function readTableFields() {
+  const t = [];
+  for (let i = 0; i < 6; i++) t.push(+$("#thD" + i).value || 0);
+  return t;
+}
+// Opcode 6 sends six dwords. The fields only appear for it, because sending
+// it with them unset is exactly how the table gets wiped to zeros.
+$("#thOp").onchange = () => { $("#thTableRow").hidden = +$("#thOp").value !== 6; };
+$("#thTableReset").onclick = () => fillTableFields(lastTable || fanTable);
+
+const runFanOp = guard(async () => {
+  const op = +$("#thOp").value;
+  const p = { op, idx: +$("#thIdx").value || 0 };
+  if (op === 2 || op === 6) p.b = +$("#thB").value || 0;
+  if (op === 4) p.duty = +$("#thRawDuty").value || 0;
+
+  if (op === 6) {
+    const t = readTableFields();
+    // A table of zeros pins the fan at full speed and the console will not
+    // come back down from it without a restart. Never send one by accident.
+    if (t.every(v => v === 0)) {
+      throw new Error("refusing to send an all-zero table - press "
+                    + "\u201cReload from console\u201d first, then edit");
+    }
+    if (lastTable && t.some((v, i) => v !== lastTable[i]) &&
+        !confirm(`Writing a new fan table:\n\n  ${lastTable.join(", ")}\n`
+               + `  becomes\n  ${t.join(", ")}\n\n`
+               + `The table is what drives the fan. SYSCON latches the speed `
+               + `it picks, so an unwanted value can need a console restart `
+               + `to clear. Continue?`)) return;
+    t.forEach((v, i) => p["d" + i] = v);
+  }
+
+  if ((op === 2 || op === 4) &&
+      !confirm(`Opcode ${op} (${FAN_OPS[op]}) writes to SYSCON. Continue?`)) return;
+
+  const r = await apiJson("fan", p);
+  $("#thOut").textContent = JSON.stringify(r, null, 1);
+  if (op === 2 || op === 4 || op === 6) await readFan();
+});
+$("#thRun").onclick = runFanOp;
+
+const restoreTable = guard(async () => {
+  if (!fanTable) throw new Error("no table captured");
+  const p = { op: 6, idx: 0, b: 0 };
+  fanTable.forEach((v, i) => p["d" + i] = v);
+  const r = await apiJson("fan", p);
+  $("#thOut").textContent = JSON.stringify(r, null, 1);
+  ev(`fan: table restored to ${fanTable.join(", ")}`, "");
+  await readFan();
+});
+$("#thRestoreTable").onclick = restoreTable;
+
+// Deep links, run last so every handler above already exists: ?tab=klog opens
+// that tab, &auto=1 also pulls a first round of data. Handy as a bookmark, and
+// it is how the README screenshots are captured.
+(function () {
+  const q = new URLSearchParams(location.search);
+  const tab = q.get("tab") || (location.hash || "").replace(/^#/, "");
+  if (tab) {
+    const b = document.querySelector(`.tabs button[data-tab="${CSS.escape(tab)}"]`);
+    if (b) b.click();
+  }
+  if (!q.get("auto")) return;
+  loadProcs().then(() => {
+    const want = q.get("pid") ? +q.get("pid")
+      : (procs.find(p => p.name === "SceShellCore") || procs[0] || {}).pid;
+    if (want == null) return;
+    sel = want;
+    const p = byPid.get(sel);
+    $("#cSel").textContent = `${p ? p.name : "?"} · ${sel}`;
+    renderProcs(); loadInfo();
+    if (tab === "mod") loadModules();
+    if (tab === "map") loadMap();
+  });
+  readSensors(); readUptime();
+  // CPU needs two samples before it can report a rate.
+  readCpu().then(() => setTimeout(() => readCpu().then(readSensors), 1500));
+
+  // The klog bridge and the recorder both live in serve.py and keep running
+  // with no page attached, so a freshly opened tab should pull their state
+  // rather than sit on "not connected" while they are plainly working.
+  if (tab === "klog") { $("#klStart").click(); }
+  if (tab === "rec") { rcPoll(); setTimeout(rcPoll, 1200); }
+  if (q.get("drawer") === "therm") setTimeout(openTherm, 400);
+  if (tab === "store") loadMounts();
+  if (tab === "files") listDir(q.get("path") || "/system/common/lib");
+  if (tab === "kern") loadKWindows();
+})();
+</script>
+</body>
+</html>
