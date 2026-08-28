@@ -15,7 +15,50 @@ struct paramdict *paramdict_alloc() {
     return pd;
 }
 
+// Percent-decoding, in place. Values point into the request buffer and the
+// result is never longer than the input, so this needs no allocation.
+//
+// Nothing decoded before this: a path of "/" arrives from any browser as %2F
+// and open() was being handed the literal three characters. Plus is decoded to
+// a space to match how URLSearchParams encodes one -- a genuine plus in a
+// filename comes through as %2B.
+static int hexval(char c) {
+    if(c >= '0' && c <= '9') return c - '0';
+    if(c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if(c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static void url_decode(char *s) {
+    char *out = s;
+
+    if(!s) {
+        return;
+    }
+
+    while(*s) {
+        if(*s == '%') {
+            int hi = hexval(s[1]);
+            int lo = hi < 0 ? -1 : hexval(s[2]);
+            if(lo >= 0) {
+                *out++ = (char)((hi << 4) | lo);
+                s += 3;
+                continue;
+            }
+        } else if(*s == '+') {
+            *out++ = ' ';
+            s++;
+            continue;
+        }
+        *out++ = *s++;
+    }
+
+    *out = 0;
+}
+
 int paramdict_add(struct paramdict *pd, char *key, char *value) {
+    url_decode(value);
+
     if(pd->length * sizeof(char *) >= pd->size) {
         pd->size += 4096;
         pd->keys = (char **)realloc(pd->keys, pd->size);
