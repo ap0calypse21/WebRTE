@@ -414,10 +414,23 @@ void install_syscall(uint32_t n, void *func) {
 int install_hooks() {
     cpu_disable_wp();
 
-    // trap_fatal hook
     uint64_t kernbase = get_kbase();
-    memcpy((void *)(kernbase + 0x1718D8), "\x4C\x89\xE7", 3); // mov rdi, r12
-    write_jmp(kernbase + 0x1718DB, (uint64_t)hook_trap_fatal);
+
+    // trap_fatal hook. This offset has always been hardcoded for one firmware
+    // and never came from a per-firmware table, so it is only correct where it
+    // happens to line up. On 13.00 kernbase+0x1718D8 lands 0x68 bytes inside an
+    // unrelated function, on a mov/test/jnz sequence; overwriting that with a
+    // jmp meant any thread running that function entered hook_trap_fatal with
+    // the wrong registers. That is what powered the console off whenever an app
+    // was launched, with the payload otherwise idle.
+    //
+    // The hook only formats crash information into klog and nothing depends on
+    // it, so skip it where the offset has not been checked rather than write a
+    // jump into the middle of live kernel code.
+    if (cachedFirmware != 1300) {
+        memcpy((void *)(kernbase + 0x1718D8), "\x4C\x89\xE7", 3); // mov rdi, r12
+        write_jmp(kernbase + 0x1718DB, (uint64_t)hook_trap_fatal);
+    }
 
     // proc
     install_syscall(107, sys_proc_list);
