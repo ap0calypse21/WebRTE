@@ -27,27 +27,44 @@ int sys_proc_list(struct thread *td, struct sys_proc_list_args *uap) {
         goto finish;
     }
 
+    // Both branches walk allproc, so hold it shared across the whole if/else.
+    // One acquire, one release, and no return in between: leaking this lock
+    // would block every fork and exit on the system.
+    if (sx_slock && allproc_lock) {
+        sx_slock(allproc_lock, 0);
+    }
+
     if(!uap->procs) {
         // count
         num = 0;
         p = *allproc;
-        do {
+        while (p && (uint64_t)p >= 0xFFFF800000000000ULL && num < 4096) {
             num++;
-        } while ((p = p->p_forw));
-        
+            p = p->p_forw;
+        }
+
         *uap->num = num;
     } else {
-        // fill structure
+        // fill structure. The caller prefaults this buffer, so the copy does
+        // not fault while the lock is held.
         num = *uap->num;
-        p = *allproc;
         for (int i = 0; i < num; i++) {
+            if (i == 0) {
+                p = *allproc;
+            }
+            if (!p || (uint64_t)p < 0xFFFF800000000000ULL) {
+                break;
+            }
+
             memcpy(uap->procs[i].p_comm, p->p_comm, sizeof(uap->procs[i].p_comm));
             uap->procs[i].pid = p->pid;
 
-            if (!(p = p->p_forw)) {
-                break;
-            }
+            p = p->p_forw;
         }
+    }
+
+    if (sx_sunlock && allproc_lock) {
+        sx_sunlock(allproc_lock);
     }
 
 finish:

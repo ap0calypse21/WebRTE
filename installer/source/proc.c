@@ -4,56 +4,78 @@
 
 #include "proc.h"
 
-// Walking allproc without holding allproc_lock races with processes exiting,
-// and this code has no way to take that lock. It cannot be made correct here,
-// but it can be stopped from following a dangling p_forw off into unmapped
-// memory, which is what turns the race into a kernel panic instead of a miss.
+// allproc is guarded by allproc_lock. Walking it without that lock races with
+// process creation and exit: the console panicked reliably when an app was
+// launched while a walk was in flight. Take the lock shared for the duration
+// of the walk.
 //
-// Two guards: every link must look like a kernel pointer before it is
-// dereferenced, and the walk is bounded so a corrupted list terminates.
+// Every path below acquires once and releases once with no return in between,
+// because leaking this lock would block every fork and exit on the system --
+// a full hang rather than a reboot.
+//
+// The pointers stay NULL on firmwares whose offsets are not mapped, and the
+// helpers then do nothing, leaving those builds exactly as they were.
 #define PROC_WALK_MAX   4096
 // Start of the upper canonical half on amd64. proc structs are malloc'd into
-// the kernel heap (0xFFFFF8.. direct map, 0xFFFFFE.. kernel map), so the test
-// has to be the canonical boundary and not KERNBASE -- anything stricter than
-// this rejects every real proc pointer.
+// the kernel heap (0xFFFFF8.. direct map, 0xFFFFCB.. observed on 13.00), so the
+// test has to be the canonical boundary and not KERNBASE -- anything stricter
+// than this rejects every real proc pointer.
 #define KVA_MIN         0xFFFF800000000000ULL
 
 static inline int proc_ptr_ok(struct proc *p) {
     return p && ((uint64_t)p >= KVA_MIN);
 }
 
+static inline void allproc_slock(void) {
+    if (sx_slock && allproc_lock) {
+        sx_slock(allproc_lock, 0);
+    }
+}
+
+static inline void allproc_sunlock(void) {
+    if (sx_sunlock && allproc_lock) {
+        sx_sunlock(allproc_lock);
+    }
+}
+
 struct proc *proc_find_by_name(const char *name) {
-    struct proc *p;
+    struct proc *p, *found = NULL;
     int guard = 0;
 
     if (!name) {
         return NULL;
     }
 
+    allproc_slock();
     p = *allproc;
     while (proc_ptr_ok(p) && ++guard < PROC_WALK_MAX) {
         if (!memcmp(p->p_comm, name, strlen(name))) {
-            return p;
+            found = p;
+            break;
         }
         p = p->p_forw;
     }
+    allproc_sunlock();
 
-    return NULL;
+    return found;
 }
 
 struct proc *proc_find_by_pid(int pid) {
-    struct proc *p;
+    struct proc *p, *found = NULL;
     int guard = 0;
 
+    allproc_slock();
     p = *allproc;
     while (proc_ptr_ok(p) && ++guard < PROC_WALK_MAX) {
         if (p->pid == pid) {
-            return p;
+            found = p;
+            break;
         }
         p = p->p_forw;
     }
+    allproc_sunlock();
 
-    return NULL;
+    return found;
 }
 
 int proc_get_vm_map(struct proc *p, struct proc_vm_map_entry **entries, uint64_t *num_entries) {
